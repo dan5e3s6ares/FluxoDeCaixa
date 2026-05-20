@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-consolidado
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: svc-consolidado
+  template:
+    metadata:
+      labels:
+        app: svc-consolidado
+    spec:
+      containers:
+        - name: consolidado
+          image: 192.168.68.100:8080/fluxo-caixa/consolidado:main-0000000
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000

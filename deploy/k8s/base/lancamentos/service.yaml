@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-lancamentos
+spec:
+  selector:
+    app: svc-lancamentos
+  ports:
+    - port: 8000
+      targetPort: 8000

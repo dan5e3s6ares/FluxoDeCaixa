@@ -1,0 +1,27 @@
+# NATS JetStream — doc 07 (namespace messaging, PVC 2Gi file storage)
+config:
+  jetstream:
+    enabled: true
+    fileStore:
+      enabled: true
+      dir: /data/jetstream
+      pvc:
+        enabled: true
+        size: 2Gi
+        storageClassName: local-path
+
+  monitor:
+    enabled: true
+    port: 8222
+
+natsBox:
+  enabled: false
+
+container:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

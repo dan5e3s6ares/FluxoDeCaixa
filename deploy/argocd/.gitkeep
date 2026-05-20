@@ -1,0 +1,2 @@
+# ArgoCD App-of-Apps root application (stub)
+# See doc 07 — deploy/argocd/root-app.yaml aponta para deploy/k8s/overlays/{env}

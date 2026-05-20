@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-lancamentos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svc-lancamentos
+  template:
+    metadata:
+      labels:
+        app: svc-lancamentos
+    spec:
+      containers:
+        - name: lancamentos
+          image: 192.168.68.100:8080/fluxo-caixa/lancamentos:main-0000000
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000

@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-consulta
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svc-consulta
+  template:
+    metadata:
+      labels:
+        app: svc-consulta
+    spec:
+      containers:
+        - name: consulta
+          image: 192.168.68.100:8080/fluxo-caixa/consulta:main-0000000
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000

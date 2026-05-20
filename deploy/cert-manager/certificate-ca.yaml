@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fluxo-caixa-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: fluxo-caixa-ca
+  secretName: fluxo-caixa-ca
+  duration: 87600h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
