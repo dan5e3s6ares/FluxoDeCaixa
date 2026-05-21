@@ -51,13 +51,17 @@ ensure_stream_lancamentos_events() {
 }
 
 ensure_stream_dlq() {
+  # Business DLQ (lancamentos.dlq.>) plus JetStream advisories when consolidado-workers
+  # exhausts max-deliver (doc 03: 3 retries → DLQ lancamentos.dlq).
+  local dlq_subjects
+  dlq_subjects="lancamentos.dlq.>,\$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.lancamentos.events.consolidado-workers,\$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.lancamentos.events.consolidado-workers"
   if stream_exists lancamentos.dlq; then
     log "stream lancamentos.dlq already exists"
     return 0
   fi
   log "creating stream lancamentos.dlq"
   nats stream add lancamentos.dlq \
-    --subjects "lancamentos.dlq.>" \
+    --subjects "${dlq_subjects}" \
     --retention limits \
     --max-age 720h \
     --storage file \
@@ -72,13 +76,23 @@ ensure_consumer_consolidado_workers() {
     return 0
   fi
   log "creating durable consumer consolidado-workers"
+  # Backoff 1s, 5s, 30s per doc 03; max-deliver 3 routes failures to lancamentos.dlq advisories.
+  local cfg
+  cfg="$(mktemp)"
+  cat >"${cfg}" <<'EOF'
+{
+  "ack_policy": "explicit",
+  "deliver_policy": "all",
+  "ack_wait": "1s",
+  "max_deliver": 3,
+  "backoff": ["1s", "5s", "30s"],
+  "replay_policy": "instant"
+}
+EOF
   nats consumer add lancamentos.events consolidado-workers \
     --pull \
-    --ack explicit \
-    --deliver all \
-    --max-deliver 3 \
-    --replay instant \
-    --defaults
+    --config "${cfg}"
+  rm -f "${cfg}"
 }
 
 main() {

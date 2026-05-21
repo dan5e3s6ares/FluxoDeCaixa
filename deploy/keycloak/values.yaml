@@ -1,0 +1,45 @@
+# Keycloak — doc 07 (namespace security, realm fluxo-caixa via bootstrap Job)
+auth:
+  adminUser: admin
+  existingSecret: fluxo-keycloak
+  passwordSecretKey: admin-password
+
+production: true
+proxy: edge
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+service:
+  type: ClusterIP
+
+ingress:
+  enabled: false
+
+metrics:
+  enabled: false
+
+postgresql:
+  enabled: true
+  auth:
+    existingSecret: fluxo-keycloak
+    username: keycloak
+    passwordSecretKey: postgres-password
+    database: keycloak
+  primary:
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: local-path
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi

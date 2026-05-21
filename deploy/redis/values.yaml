@@ -1,0 +1,30 @@
+# Redis standalone — doc 07 (namespace cache, volátil, maxmemory 256MB allkeys-lru)
+architecture: standalone
+
+auth:
+  enabled: true
+  existingSecret: fluxo-redis
+  existingSecretPasswordKey: redis-password
+
+master:
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+replica:
+  replicaCount: 0
+
+metrics:
+  enabled: false
+
+commonConfiguration: |-
+  appendonly no
+  save ""
+  maxmemory 256mb
+  maxmemory-policy allkeys-lru

@@ -1,0 +1,30 @@
+# Tempo — doc 07 (namespace observability, PVC 3Gi, traces backend for Grafana)
+tempo:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+  retention: 168h
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+persistence:
+  enabled: true
+  size: 3Gi
+  storageClassName: local-path
+
+service:
+  type: ClusterIP

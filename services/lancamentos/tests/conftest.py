@@ -11,3 +11,4 @@ os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317
 os.environ.setdefault("OTEL_SERVICE_NAME", "svc-lancamentos")
 os.environ.setdefault("LOG_LEVEL", "INFO")
 os.environ.setdefault("ENVIRONMENT", "test")
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")

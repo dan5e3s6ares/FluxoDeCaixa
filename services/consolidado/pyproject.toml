@@ -5,9 +5,17 @@ description = "svc-consolidado — consumer de eventos, projeção materializada
 requires-python = ">=3.12"
 dependencies = [
     "fcx-shared",
+    "alembic>=1.14.0",
     "fastapi>=0.115.0",
+    "nats-py>=2.9.0",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-logging>=0.49b0",
+    "opentelemetry-sdk>=1.28.0",
     "pydantic-settings>=2.6.0",
+    "redis>=5.0.0",
+    "sqlalchemy>=2.0.36",
     "uvicorn[standard]>=0.32.0",
+    "psycopg2-binary>=2.9.12",
 ]
 
 [tool.uv.sources]
@@ -17,6 +25,7 @@ fcx-shared = { path = "../../platform/shared", editable = true }
 dev = [
     "httpx>=0.28.0",
     "pytest>=8.3.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [build-system]

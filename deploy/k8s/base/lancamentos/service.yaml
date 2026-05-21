@@ -2,9 +2,13 @@ apiVersion: v1
 kind: Service
 metadata:
   name: svc-lancamentos
+  labels:
+    app.kubernetes.io/name: svc-lancamentos
+    app.kubernetes.io/part-of: fluxo-caixa
 spec:
   selector:
     app: svc-lancamentos
   ports:
-    - port: 8000
-      targetPort: 8000
+    - name: http
+      port: 8000
+      targetPort: http

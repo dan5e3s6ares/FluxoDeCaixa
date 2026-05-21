@@ -14,6 +14,13 @@ config:
     enabled: true
     port: 8222
 
+promExporter:
+  enabled: true
+  port: 7777
+  image:
+    repository: natsio/prometheus-nats-exporter
+    tag: 0.15.0
+
 natsBox:
   enabled: false
 

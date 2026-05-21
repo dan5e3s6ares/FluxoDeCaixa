@@ -1,0 +1,17 @@
+# Non-sensitive env for svc-lancamentos (doc 07). Secrets: fluxo-pg-app, fluxo-redis.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: svc-lancamentos-connection
+  labels:
+    app.kubernetes.io/name: svc-lancamentos
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  NATS_URL: nats://nats.messaging.svc.cluster.local:4222
+  KEYCLOAK_URL: http://keycloak.security.svc.cluster.local:8080
+  KEYCLOAK_REALM: fluxo-caixa
+  KEYCLOAK_CLIENT_ID: svc-lancamentos
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4317
+  OTEL_SERVICE_NAME: svc-lancamentos
+  LOG_LEVEL: INFO
+  ENVIRONMENT: dev

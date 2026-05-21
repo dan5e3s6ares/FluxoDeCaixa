@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fluxo-caixa/schemas/post-lancamento.request.json",
+  "title": "LancamentoCreateRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["valor", "tipo"],
+  "properties": {
+    "valor": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 9999999.99,
+      "multipleOf": 0.01
+    },
+    "tipo": {
+      "type": "string",
+      "enum": ["CREDITO", "DEBITO"]
+    },
+    "data_competencia": {
+      "type": "string",
+      "format": "date"
+    },
+    "descricao": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "categoria_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

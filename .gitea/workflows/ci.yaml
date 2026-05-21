@@ -1,0 +1,281 @@
+# Gitea Actions CI — doc 07: lint → unit test → build → push Harbor → GitOps tag
+# Path-filtered per service; PRs run lint+test only; main push deploys via ArgoCD.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/**"
+      - "platform/shared/**"
+      - ".gitea/workflows/**"
+  pull_request:
+    paths:
+      - "services/**"
+      - "platform/shared/**"
+      - ".gitea/workflows/**"
+
+env:
+  HARBOR_REGISTRY: 192.168.68.100:8080
+  IMAGE_NAMESPACE: fluxo-caixa
+
+jobs:
+  detect:
+    runs-on: self-hosted
+    outputs:
+      lancamentos: ${{ steps.filter.outputs.lancamentos }}
+      consolidado: ${{ steps.filter.outputs.consolidado }}
+      consulta: ${{ steps.filter.outputs.consulta }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.before }}" ] && \
+               [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="$(git rev-parse "${{ github.sha }}~1" 2>/dev/null || echo "")"
+          fi
+
+          if [ -z "${BASE}" ]; then
+            CHANGED="$(git ls-files)"
+          else
+            CHANGED="$(git diff --name-only "${BASE}" HEAD || true)"
+          fi
+
+          shared=false
+          workflow=false
+          echo "${CHANGED}" | grep -q '^platform/shared/' && shared=true
+          echo "${CHANGED}" | grep -q '^\.gitea/workflows/' && workflow=true
+
+          for svc in lancamentos consolidado consulta; do
+            if ${shared} || ${workflow} || echo "${CHANGED}" | grep -q "^services/${svc}/"; then
+              echo "${svc}=true" >> "${GITHUB_OUTPUT}"
+            else
+              echo "${svc}=false" >> "${GITHUB_OUTPUT}"
+            fi
+          done
+
+  lancamentos:
+    needs: detect
+    if: needs.detect.outputs.lancamentos == 'true'
+    runs-on: self-hosted
+    env:
+      SERVICE_DIR: lancamentos
+      IMAGE_NAME: svc-lancamentos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint
+        working-directory: services/lancamentos
+        run: |
+          uv sync
+          uv run --with ruff ruff check app tests --select E9,F63,F7,F82 --line-length 120
+
+      - name: Unit tests
+        working-directory: services/lancamentos
+        run: uv run pytest tests/unit
+
+      - name: Build image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-${SHORT_SHA}"
+          podman build -f "services/${SERVICE_DIR}/Dockerfile" -t "${IMAGE}" .
+
+      - name: Push to Harbor
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-${SHORT_SHA}"
+          echo "${HARBOR_PASSWORD}" | podman login "${HARBOR_REGISTRY}" \
+            -u "${HARBOR_USERNAME}" --password-stdin
+          podman push "${IMAGE}"
+
+      - name: Update GitOps manifests
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="main-${SHORT_SHA}"
+          DEPLOY_DIR="deploy/k8s/base/${SERVICE_DIR}"
+
+          git config user.name "gitea-actions[bot]"
+          git config user.email "actions@gitea.local"
+
+          for manifest in "${DEPLOY_DIR}"/*.yaml; do
+            if grep -q "${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-" "${manifest}"; then
+              sed -i -E \
+                "s|(${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:)main-[a-f0-9]+|\1${TAG}|g" \
+                "${manifest}"
+            fi
+          done
+
+          if git diff --quiet; then
+            echo "No manifest changes for ${IMAGE_NAME}"
+            exit 0
+          fi
+
+          git add "${DEPLOY_DIR}/"
+          git commit -m "ci(${SERVICE_DIR}): bump ${IMAGE_NAME} to ${TAG} [skip ci]"
+          SERVER="${{ github.server_url }}"
+          SERVER="${SERVER#https://}"
+          SERVER="${SERVER#http://}"
+          git push "https://oauth2:${GITEA_TOKEN}@${SERVER}/${{ github.repository }}.git" HEAD:main
+
+  consolidado:
+    needs: detect
+    if: needs.detect.outputs.consolidado == 'true'
+    runs-on: self-hosted
+    env:
+      SERVICE_DIR: consolidado
+      IMAGE_NAME: consolidado
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint
+        working-directory: services/consolidado
+        run: |
+          uv sync
+          uv run --with ruff ruff check app tests --select E9,F63,F7,F82 --line-length 120
+
+      - name: Unit tests
+        working-directory: services/consolidado
+        run: uv run pytest tests/unit
+
+      - name: Build image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-${SHORT_SHA}"
+          podman build -f "services/${SERVICE_DIR}/Dockerfile" -t "${IMAGE}" .
+
+      - name: Push to Harbor
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-${SHORT_SHA}"
+          echo "${HARBOR_PASSWORD}" | podman login "${HARBOR_REGISTRY}" \
+            -u "${HARBOR_USERNAME}" --password-stdin
+          podman push "${IMAGE}"
+
+      - name: Update GitOps manifests
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="main-${SHORT_SHA}"
+          DEPLOY_DIR="deploy/k8s/base/${SERVICE_DIR}"
+
+          git config user.name "gitea-actions[bot]"
+          git config user.email "actions@gitea.local"
+
+          for manifest in "${DEPLOY_DIR}"/*.yaml; do
+            if grep -q "${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-" "${manifest}"; then
+              sed -i -E \
+                "s|(${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:)main-[a-f0-9]+|\1${TAG}|g" \
+                "${manifest}"
+            fi
+          done
+
+          if git diff --quiet; then
+            echo "No manifest changes for ${IMAGE_NAME}"
+            exit 0
+          fi
+
+          git add "${DEPLOY_DIR}/"
+          git commit -m "ci(${SERVICE_DIR}): bump ${IMAGE_NAME} to ${TAG} [skip ci]"
+          SERVER="${{ github.server_url }}"
+          SERVER="${SERVER#https://}"
+          SERVER="${SERVER#http://}"
+          git push "https://oauth2:${GITEA_TOKEN}@${SERVER}/${{ github.repository }}.git" HEAD:main
+
+  consulta:
+    needs: detect
+    if: needs.detect.outputs.consulta == 'true'
+    runs-on: self-hosted
+    env:
+      SERVICE_DIR: consulta
+      IMAGE_NAME: consulta
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint
+        working-directory: services/consulta
+        run: |
+          uv sync
+          uv run --with ruff ruff check app tests --select E9,F63,F7,F82 --line-length 120
+
+      - name: Unit tests
+        working-directory: services/consulta
+        run: uv run pytest tests/unit
+
+      - name: Build image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-${SHORT_SHA}"
+          podman build -f "services/${SERVICE_DIR}/Dockerfile" -t "${IMAGE}" .
+
+      - name: Push to Harbor
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-${SHORT_SHA}"
+          echo "${HARBOR_PASSWORD}" | podman login "${HARBOR_REGISTRY}" \
+            -u "${HARBOR_USERNAME}" --password-stdin
+          podman push "${IMAGE}"
+
+      - name: Update GitOps manifests
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="main-${SHORT_SHA}"
+          DEPLOY_DIR="deploy/k8s/base/${SERVICE_DIR}"
+
+          git config user.name "gitea-actions[bot]"
+          git config user.email "actions@gitea.local"
+
+          for manifest in "${DEPLOY_DIR}"/*.yaml; do
+            if grep -q "${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:main-" "${manifest}"; then
+              sed -i -E \
+                "s|(${HARBOR_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:)main-[a-f0-9]+|\1${TAG}|g" \
+                "${manifest}"
+            fi
+          done
+
+          if git diff --quiet; then
+            echo "No manifest changes for ${IMAGE_NAME}"
+            exit 0
+          fi
+
+          git add "${DEPLOY_DIR}/"
+          git commit -m "ci(${SERVICE_DIR}): bump ${IMAGE_NAME} to ${TAG} [skip ci]"
+          SERVER="${{ github.server_url }}"
+          SERVER="${SERVER#https://}"
+          SERVER="${SERVER#http://}"
+          git push "https://oauth2:${GITEA_TOKEN}@${SERVER}/${{ github.repository }}.git" HEAD:main

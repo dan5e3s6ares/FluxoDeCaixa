@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pg-bootstrap
+  labels:
+    app.kubernetes.io/name: pg-bootstrap
+    app.kubernetes.io/part-of: fluxo-caixa
+spec:
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 300
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pg-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: postgres:16.4
+          command: ["/bin/sh", "/scripts/bootstrap.sh"]
+          env:
+            - name: PGHOST
+              value: fluxo-pg-rw.database.svc.cluster.local
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: fluxo
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-pg-app
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-pg-app
+                  key: password
+            - name: PG_WAIT_ATTEMPTS
+              value: "60"
+            - name: PG_WAIT_DELAY
+              value: "2"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: pg-bootstrap
+            defaultMode: 0555

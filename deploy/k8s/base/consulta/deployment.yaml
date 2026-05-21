@@ -1,7 +1,11 @@
+# svc-consulta — read-only API (doc 07): consolidado/lancamentos queries, Redis cache
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: svc-consulta
+  labels:
+    app.kubernetes.io/name: svc-consulta
+    app.kubernetes.io/part-of: fluxo-caixa
 spec:
   replicas: 1
   selector:
@@ -11,13 +15,45 @@ spec:
     metadata:
       labels:
         app: svc-consulta
+        app.kubernetes.io/name: svc-consulta
+        app.kubernetes.io/part-of: fluxo-caixa
     spec:
       containers:
         - name: consulta
           image: 192.168.68.100:8080/fluxo-caixa/consulta:main-0000000
           ports:
-            - containerPort: 8000
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: svc-consulta-connection
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-pg-app
+                  key: database-url-consolidado
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-redis
+                  key: redis-url
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           readinessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20

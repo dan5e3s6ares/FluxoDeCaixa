@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: database
+
+configMapGenerator:
+  - name: pg-bootstrap
+    files:
+      - bootstrap.sh=../../platform/postgres/bootstrap.sh
+      - bootstrap.sql=../../platform/postgres/bootstrap.sql
+    options:
+      disableNameSuffixHash: true
+
+resources:
+  - cluster.yaml
+  - connection-configmap.yaml
+  - bootstrap-job.yaml

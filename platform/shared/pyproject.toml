@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Shared Pydantic settings and structured logging for fluxo-caixa services"
 requires-python = ">=3.12"
 dependencies = [
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
+    "opentelemetry-instrumentation-logging>=0.49b0",
+    "opentelemetry-sdk>=1.28.0",
     "pydantic-settings>=2.6.0",
 ]
 

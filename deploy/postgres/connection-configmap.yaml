@@ -1,0 +1,16 @@
+# Connection hints for db-migrate-{svc} jobs (doc 07). Credentials: Secret/fluxo-pg-app.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-connection
+  labels:
+    app.kubernetes.io/name: fluxo-pg
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  PGHOST: fluxo-pg-rw.database.svc.cluster.local
+  PGPORT: "5432"
+  PGDATABASE: fluxo
+  SEARCH_PATH_LANCAMENTOS: lancamentos
+  SEARCH_PATH_CONSOLIDADO: consolidado
+  DATABASE_URL_LANCAMENTOS: postgresql://fluxo@fluxo-pg-rw.database.svc.cluster.local:5432/fluxo?options=-csearch_path%3Dlancamentos
+  DATABASE_URL_CONSOLIDADO: postgresql://fluxo@fluxo-pg-rw.database.svc.cluster.local:5432/fluxo?options=-csearch_path%3Dconsolidado

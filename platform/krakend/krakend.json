@@ -1,0 +1,272 @@
+{
+  "$schema": "https://www.krakend.io/schema/v3.json",
+  "version": 3,
+  "name": "fluxo-caixa-gateway",
+  "timeout": "3000ms",
+  "cache_ttl": "300s",
+  "output_encoding": "json",
+  "port": 8080,
+  "tls": {
+    "public_key": "/etc/krakend/certs/tls.crt",
+    "private_key": "/etc/krakend/certs/tls.key",
+    "min_version": "TLS12"
+  },
+  "extra_config": {
+    "router": {
+      "return_error_msg": true,
+      "health_path": "/__health"
+    },
+    "telemetry/logging": {
+      "level": "INFO",
+      "prefix": "[KRAKEND]",
+      "syslog": false,
+      "stdout": true
+    },
+    "telemetry/metrics": {
+      "collection_time": "30s",
+      "proxy_disabled": false,
+      "router_disabled": false,
+      "backend_disabled": false,
+      "endpoint_disabled": false,
+      "listen_address": ":8090"
+    },
+    "security/cors": {
+      "allow_origins": ["*"],
+      "allow_methods": ["GET", "POST", "OPTIONS"],
+      "allow_headers": [
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-Request-Id",
+        "X-Correlation-Id",
+        "traceparent"
+      ],
+      "expose_headers": [
+        "X-Correlation-Id",
+        "X-Consolidado-Stale",
+        "X-Cache-Status",
+        "X-Data-Age-Seconds",
+        "Retry-After"
+      ],
+      "max_age": "12h"
+    }
+  },
+  "endpoints": [
+    {
+      "@comment": "Public health (no JWT)",
+      "endpoint": "/health",
+      "method": "GET",
+      "output_encoding": "string",
+      "backend": [
+        {
+          "url_pattern": "/__health",
+          "encoding": "string",
+          "method": "GET",
+          "host": ["https://127.0.0.1:8080"],
+          "disable_host_sanitize": true
+        }
+      ]
+    },
+    {
+      "@comment": "POST /v1/lancamentos → svc-lancamentos (doc 05: schema, merchant 60/min, client 120/min burst 20, CB 5/30s)",
+      "endpoint": "/v1/lancamentos",
+      "method": "POST",
+      "input_headers": [
+        "Authorization",
+        "Idempotency-Key",
+        "Content-Type",
+        "X-Request-Id",
+        "X-Correlation-Id",
+        "traceparent",
+        "x-merchant-id",
+        "x-client-id"
+      ],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa/protocol/openid-connect/certs",
+          "cache": true,
+          "cache_duration": 300,
+          "issuer": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa",
+          "disable_jwk_security": true,
+          "propagate_claims": [
+            ["merchant_id", "x-merchant-id"],
+            ["azp", "x-client-id"]
+          ]
+        },
+        "validation/json-schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["valor", "tipo"],
+          "properties": {
+            "valor": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 9999999.99,
+              "multipleOf": 0.01
+            },
+            "tipo": {
+              "type": "string",
+              "enum": ["CREDITO", "DEBITO"]
+            },
+            "data_competencia": {
+              "type": "string",
+              "format": "date"
+            },
+            "descricao": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "categoria_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "qos/ratelimit/router": {
+          "@comment": "Token bucket (doc 05). CE in-memory counters; REDIS_URL wired for EE redis backend.",
+          "max_rate": 120,
+          "capacity": 140,
+          "every": "1m",
+          "client_max_rate": 60,
+          "client_capacity": 80,
+          "strategy": "header",
+          "key": "x-merchant-id"
+        },
+        "github.com/devopsfaith/krakend-circuitbreaker/gobreaker": {
+          "interval": 30,
+          "timeout": 30,
+          "max_errors": 5
+        }
+      },
+      "backend": [
+        {
+          "url_pattern": "/v1/lancamentos",
+          "encoding": "json",
+          "method": "POST",
+          "host": ["http://svc-lancamentos.fluxo-caixa.svc.cluster.local:8000"],
+          "extra_config": {
+            "github.com/devopsfaith/krakend-circuitbreaker/gobreaker": {
+              "interval": 30,
+              "timeout": 30,
+              "max_errors": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@comment": "GET /v1/lancamentos → svc-lancamentos (doc 05: merchant read 300/min, CB 5/30s)",
+      "endpoint": "/v1/lancamentos",
+      "method": "GET",
+      "input_query_strings": ["data_inicio", "data_fim", "tipo", "cursor", "limit"],
+      "input_headers": [
+        "Authorization",
+        "X-Request-Id",
+        "X-Correlation-Id",
+        "traceparent",
+        "x-merchant-id",
+        "x-client-id"
+      ],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa/protocol/openid-connect/certs",
+          "cache": true,
+          "cache_duration": 300,
+          "issuer": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa",
+          "disable_jwk_security": true,
+          "propagate_claims": [
+            ["merchant_id", "x-merchant-id"],
+            ["azp", "x-client-id"]
+          ]
+        },
+        "qos/ratelimit/router": {
+          "max_rate": 120,
+          "capacity": 140,
+          "every": "1m",
+          "client_max_rate": 300,
+          "client_capacity": 320,
+          "strategy": "header",
+          "key": "x-merchant-id"
+        },
+        "github.com/devopsfaith/krakend-circuitbreaker/gobreaker": {
+          "interval": 30,
+          "timeout": 30,
+          "max_errors": 5
+        }
+      },
+      "backend": [
+        {
+          "url_pattern": "/v1/lancamentos",
+          "encoding": "json",
+          "method": "GET",
+          "host": ["http://svc-lancamentos.fluxo-caixa.svc.cluster.local:8000"],
+          "extra_config": {
+            "github.com/devopsfaith/krakend-circuitbreaker/gobreaker": {
+              "interval": 30,
+              "timeout": 30,
+              "max_errors": 5
+            }
+          }
+        }
+      ]
+    },
+    {
+      "@comment": "GET /v1/consolidado/{data} → svc-consulta (doc 05: merchant read 300/min, CB 5/30s)",
+      "endpoint": "/v1/consolidado/{data}",
+      "method": "GET",
+      "input_headers": [
+        "Authorization",
+        "X-Request-Id",
+        "X-Correlation-Id",
+        "traceparent",
+        "x-merchant-id",
+        "x-client-id"
+      ],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa/protocol/openid-connect/certs",
+          "cache": true,
+          "cache_duration": 300,
+          "issuer": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa",
+          "disable_jwk_security": true,
+          "propagate_claims": [
+            ["merchant_id", "x-merchant-id"],
+            ["azp", "x-client-id"]
+          ]
+        },
+        "qos/ratelimit/router": {
+          "max_rate": 120,
+          "capacity": 140,
+          "every": "1m",
+          "client_max_rate": 300,
+          "client_capacity": 320,
+          "strategy": "header",
+          "key": "x-merchant-id"
+        },
+        "github.com/devopsfaith/krakend-circuitbreaker/gobreaker": {
+          "interval": 30,
+          "timeout": 30,
+          "max_errors": 5
+        }
+      },
+      "backend": [
+        {
+          "url_pattern": "/v1/consolidado/{data}",
+          "encoding": "json",
+          "method": "GET",
+          "host": ["http://svc-consulta.fluxo-caixa.svc.cluster.local:8000"],
+          "extra_config": {
+            "github.com/devopsfaith/krakend-circuitbreaker/gobreaker": {
+              "interval": 30,
+              "timeout": 30,
+              "max_errors": 5
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

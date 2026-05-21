@@ -1,0 +1,65 @@
+# KrakenD gateway — doc 07 (namespace gateway, NodePort 30443, JWT JWKS Keycloak)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: krakend
+  labels:
+    app.kubernetes.io/name: krakend
+    app.kubernetes.io/part-of: fluxo-caixa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: krakend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: krakend
+        app.kubernetes.io/part-of: fluxo-caixa
+    spec:
+      containers:
+        - name: krakend
+          image: krakend/krakend-ce:2.7.2
+          args:
+            - run
+            - -c
+            - /etc/krakend/krakend.json
+          ports:
+            - name: https
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 8090
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/krakend/krakend.json
+              subPath: krakend.json
+              readOnly: true
+            - name: tls
+              mountPath: /etc/krakend/certs
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: config
+          configMap:
+            name: krakend-config
+        - name: tls
+          secret:
+            secretName: krakend-tls

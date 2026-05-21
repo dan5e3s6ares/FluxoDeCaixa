@@ -1,0 +1,53 @@
+# Outbox publisher worker — same image/env as svc-lancamentos (doc 03/07)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: svc-lancamentos-outbox-worker
+  labels:
+    app.kubernetes.io/name: svc-lancamentos-outbox-worker
+    app.kubernetes.io/part-of: fluxo-caixa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: svc-lancamentos-outbox-worker
+  template:
+    metadata:
+      labels:
+        app: svc-lancamentos-outbox-worker
+        app.kubernetes.io/name: svc-lancamentos-outbox-worker
+        app.kubernetes.io/part-of: fluxo-caixa
+    spec:
+      containers:
+        - name: outbox-worker
+          image: 192.168.68.100:8080/fluxo-caixa/svc-lancamentos:main-0000000
+          command:
+            - uv
+            - run
+            - python
+            - -m
+            - app.workers.outbox_worker
+          ports:
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: svc-lancamentos-connection
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-pg-app
+                  key: database-url-lancamentos
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-redis
+                  key: redis-url
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

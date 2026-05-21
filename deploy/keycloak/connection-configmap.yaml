@@ -1,0 +1,11 @@
+# Connection hints for services (doc 07). Admin credentials: Secret/fluxo-keycloak.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-connection
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  KEYCLOAK_URL: http://keycloak.security.svc.cluster.local:8080
+  KEYCLOAK_REALM: fluxo-caixa

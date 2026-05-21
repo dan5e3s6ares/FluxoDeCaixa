@@ -1,0 +1,15 @@
+# Connection hints for services (doc 07). TLS: Secret/krakend-tls in gateway namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: krakend-connection
+  labels:
+    app.kubernetes.io/name: krakend
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  KRAKEND_URL: https://krakend.gateway.svc.cluster.local:8080
+  KRAKEND_JWKS_URL: http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa/protocol/openid-connect/certs
+  KEYCLOAK_ISSUER: http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa
+  # Shared Redis (doc 05) — CE uses in-memory token bucket; EE can use qos/ratelimit/router/redis
+  REDIS_HOST: redis-master.cache.svc.cluster.local
+  REDIS_PORT: "6379"

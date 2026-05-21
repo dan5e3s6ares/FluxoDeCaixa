@@ -1,0 +1,12 @@
+# Connection hints for services (doc 07). Credentials: Secret/fluxo-redis (redis-password, redis-url).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-connection
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  REDIS_HOST: redis-master.cache.svc.cluster.local
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"

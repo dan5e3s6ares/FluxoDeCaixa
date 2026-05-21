@@ -2,9 +2,13 @@ apiVersion: v1
 kind: Service
 metadata:
   name: svc-consulta
+  labels:
+    app.kubernetes.io/name: svc-consulta
+    app.kubernetes.io/part-of: fluxo-caixa
 spec:
   selector:
     app: svc-consulta
   ports:
-    - port: 8000
-      targetPort: 8000
+    - name: http
+      port: 8000
+      targetPort: http

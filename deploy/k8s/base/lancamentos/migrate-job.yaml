@@ -1,0 +1,51 @@
+# Alembic migrations for schema lancamentos (doc 07). ArgoCD PreSync before app rollout.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate-lancamentos
+  labels:
+    app.kubernetes.io/name: db-migrate-lancamentos
+    app.kubernetes.io/part-of: fluxo-caixa
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  ttlSecondsAfterFinished: 300
+  activeDeadlineSeconds: 600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: db-migrate-lancamentos
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: 192.168.68.100:8080/fluxo-caixa/svc-lancamentos:main-0000000
+          command:
+            - uv
+            - run
+            - alembic
+            - upgrade
+            - head
+          envFrom:
+            - configMapRef:
+                name: svc-lancamentos-connection
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-pg-app
+                  key: database-url-lancamentos
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-redis
+                  key: redis-url
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

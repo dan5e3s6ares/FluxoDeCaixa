@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fluxo-caixa
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: fluxo-caixa
+    app.kubernetes.io/managed-by: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: __GIT_REPO_URL__
+    targetRevision: __GIT_TARGET_REVISION__
+    path: __KUSTOMIZE_OVERLAY_PATH__
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: fluxo-caixa
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

@@ -1,0 +1,17 @@
+# Non-sensitive env for svc-consolidado (doc 07). Secrets: fluxo-pg-app, fluxo-redis.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: svc-consolidado-connection
+  labels:
+    app.kubernetes.io/name: svc-consolidado
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  NATS_URL: nats://nats.messaging.svc.cluster.local:4222
+  KEYCLOAK_URL: http://keycloak.security.svc.cluster.local:8080
+  KEYCLOAK_REALM: fluxo-caixa
+  KEYCLOAK_CLIENT_ID: svc-consolidado
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4317
+  OTEL_SERVICE_NAME: svc-consolidado
+  LOG_LEVEL: INFO
+  ENVIRONMENT: dev

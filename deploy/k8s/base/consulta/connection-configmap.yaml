@@ -1,0 +1,17 @@
+# Non-sensitive env for svc-consulta (doc 07). Secrets: fluxo-pg-app, fluxo-redis.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: svc-consulta-connection
+  labels:
+    app.kubernetes.io/name: svc-consulta
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  NATS_URL: nats://nats.messaging.svc.cluster.local:4222
+  KEYCLOAK_URL: http://keycloak.security.svc.cluster.local:8080
+  KEYCLOAK_REALM: fluxo-caixa
+  KEYCLOAK_CLIENT_ID: svc-consulta
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4317
+  OTEL_SERVICE_NAME: svc-consulta
+  LOG_LEVEL: INFO
+  ENVIRONMENT: dev

@@ -1,0 +1,15 @@
+# Connection hints for services (doc 07). Grafana admin: values grafana adminPassword (dev only).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-connection
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: fluxo-caixa
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  PROMETHEUS_URL: http://prometheus-server.observability.svc.cluster.local
+  GRAFANA_URL: http://grafana.observability.svc.cluster.local
+  TEMPO_URL: http://tempo.observability.svc.cluster.local:3200
+  LOKI_URL: http://loki.observability.svc.cluster.local:3100

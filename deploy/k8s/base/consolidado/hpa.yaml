@@ -1,0 +1,22 @@
+# HPA for svc-consolidado — min 2 replicas per doc 07 (JetStream consumer workers).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: svc-consolidado
+  labels:
+    app.kubernetes.io/name: svc-consolidado
+    app.kubernetes.io/part-of: fluxo-caixa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: svc-consolidado
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
