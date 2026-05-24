@@ -232,27 +232,77 @@ gitea_api() {
 }
 
 gitea_docker_exec() {
-  # Gitea refuses CLI commands run as root inside the container.
-  run_as_root docker exec -u git -w /etc/gitea gitea "$@"
+  # Gitea refuses CLI commands run as root; config lives under /data/gitea/conf (not /etc/gitea).
+  run_as_root docker exec -u git gitea gitea -c /data/gitea/conf/app.ini "$@"
+}
+
+gitea_admin_auth_ok() {
+  curl -fsS -H "$(auth_basic_header)" "${GITEA_API_URL}/user" >/dev/null 2>&1
+}
+
+gitea_app_ini_ready() {
+  run_as_root docker exec gitea test -f /data/gitea/conf/app.ini 2>/dev/null
+}
+
+wait_for_gitea_installed() {
+  log_info "waiting for Gitea installation (app.ini)..."
+  retry "${GITEA_READY_ATTEMPTS}" "${GITEA_READY_DELAY}" gitea_app_ini_ready
+  log_info "Gitea installation config ready"
 }
 
 ensure_admin_user() {
-  if curl -fsS -H "$(auth_basic_header)" "${GITEA_API_URL}/user" >/dev/null 2>&1; then
+  if gitea_admin_auth_ok; then
     log_info "Gitea admin user already configured"
     return 0
   fi
 
   log_info "creating Gitea admin user (${GITEA_ADMIN_USER})..."
-  gitea_docker_exec gitea admin user create \
-    --admin \
-    --username "${GITEA_ADMIN_USER}" \
-    --password "${GITEA_ADMIN_PASSWORD}" \
-    --email "${GITEA_ADMIN_EMAIL}" \
-    --must-change-password=false 2>/dev/null \
-    || gitea_docker_exec gitea admin user change-password \
+  local attempt err_file max_attempts
+  max_attempts="${GITEA_ADMIN_CREATE_ATTEMPTS:-12}"
+  err_file="$(mktemp)"
+  trap 'rm -f "${err_file}"' RETURN
+
+  for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    if gitea_admin_auth_ok; then
+      log_info "Gitea admin login OK"
+      return 0
+    fi
+
+    if gitea_docker_exec admin user create \
+      --admin \
       --username "${GITEA_ADMIN_USER}" \
-      --password "${GITEA_ADMIN_PASSWORD}" 2>/dev/null \
-    || log_warn "admin user may already exist; continuing"
+      --password "${GITEA_ADMIN_PASSWORD}" \
+      --email "${GITEA_ADMIN_EMAIL}" \
+      --must-change-password=false 2>"${err_file}"; then
+      log_info "Gitea admin user created"
+      continue
+    fi
+    local err_create
+    err_create="$(tr '\n' ' ' <"${err_file}")"
+
+    if gitea_docker_exec admin user change-password \
+      --username "${GITEA_ADMIN_USER}" \
+      --password "${GITEA_ADMIN_PASSWORD}" 2>"${err_file}"; then
+      log_info "Gitea admin password updated"
+      continue
+    fi
+    local err_pw
+    err_pw="$(tr '\n' ' ' <"${err_file}")"
+
+    if (( attempt < max_attempts )); then
+      log_warn "Gitea admin bootstrap attempt ${attempt}/${max_attempts} failed; retrying in ${GITEA_READY_DELAY}s..."
+      [[ -n "${err_create}" ]] && log_warn "  create: ${err_create}"
+      [[ -n "${err_pw}" ]] && log_warn "  change-password: ${err_pw}"
+      sleep "${GITEA_READY_DELAY}"
+    fi
+  done
+
+  if ! gitea_admin_auth_ok; then
+    log_error "Gitea admin login failed for user ${GITEA_ADMIN_USER}"
+    gitea_docker_exec admin user list 2>&1 | head -20 || true
+    exit 1
+  fi
+  log_info "Gitea admin login OK"
 }
 
 ensure_admin_token() {
@@ -261,7 +311,7 @@ ensure_admin_token() {
     return 0
   fi
 
-  if ! curl -fsS -H "$(auth_basic_header)" "${GITEA_API_URL}/user" >/dev/null 2>&1; then
+  if ! gitea_admin_auth_ok; then
     log_error "Gitea admin login failed for user ${GITEA_ADMIN_USER}"
     exit 1
   fi
@@ -532,6 +582,7 @@ main() {
   ensure_container_runtime
   install_gitea_stack
   wait_for_gitea
+  wait_for_gitea_installed
   ensure_admin_user
   ensure_admin_token
   ensure_repo_owner
