@@ -113,7 +113,7 @@ render_root_app() {
 apply_gitops_overlay() {
   local overlay_path="${REPO_ROOT}/${KUSTOMIZE_OVERLAY_PATH}"
   log_info "applying kustomize overlay ${overlay_path} (bootstrap before ArgoCD git sync)"
-  kubectl_cmd apply -k "${overlay_path}"
+  kubectl_apply_k "${overlay_path}"
 }
 
 apply_argocd_repo_secret() {

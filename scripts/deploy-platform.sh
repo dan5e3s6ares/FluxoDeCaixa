@@ -129,7 +129,7 @@ apply_cert_manager_manifests() {
   ensure_namespace "${GATEWAY_NAMESPACE}"
 
   log_info "applying cert-manager issuers and certificates from ${CERT_MANAGER_MANIFESTS}"
-  kubectl_cmd apply -k "${CERT_MANAGER_MANIFESTS}"
+  kubectl_apply_k "${CERT_MANAGER_MANIFESTS}"
 }
 
 certificate_is_ready() {
@@ -226,7 +226,7 @@ run_nats_bootstrap() {
 
   log_info "applying nats-bootstrap manifests from ${NATS_BOOTSTRAP_MANIFESTS}"
   kubectl_cmd delete job nats-bootstrap -n "${NATS_NAMESPACE}" --ignore-not-found
-  kubectl_cmd apply -k "${NATS_BOOTSTRAP_MANIFESTS}"
+  kubectl_apply_k "${NATS_BOOTSTRAP_MANIFESTS}"
   wait_for_nats_bootstrap
 }
 
@@ -311,7 +311,7 @@ wait_for_postgres_bootstrap() {
 run_postgres_bootstrap() {
   log_info "running pg-bootstrap job"
   kubectl_cmd delete job pg-bootstrap -n "${POSTGRES_NAMESPACE}" --ignore-not-found
-  kubectl_cmd apply -k "${POSTGRES_MANIFESTS}"
+  kubectl_apply_k "${POSTGRES_MANIFESTS}"
   wait_for_postgres_bootstrap
 }
 
@@ -393,7 +393,7 @@ apply_redis_connection_config() {
   fi
 
   log_info "applying redis-connection ConfigMap from ${REDIS_MANIFESTS}"
-  kubectl_cmd apply -k "${REDIS_MANIFESTS}"
+  kubectl_apply_k "${REDIS_MANIFESTS}"
 }
 
 deploy_redis_stack() {
@@ -495,7 +495,7 @@ run_keycloak_bootstrap() {
 
   log_info "applying keycloak-bootstrap manifests from ${KEYCLOAK_MANIFESTS}"
   kubectl_cmd delete job keycloak-bootstrap -n "${KEYCLOAK_NAMESPACE}" --ignore-not-found
-  kubectl_cmd apply -k "${KEYCLOAK_MANIFESTS}"
+  kubectl_apply_k "${KEYCLOAK_MANIFESTS}"
   wait_for_keycloak_bootstrap
 }
 
@@ -548,7 +548,7 @@ apply_krakend_manifests() {
   fi
 
   log_info "applying KrakenD manifests from ${KRAKEND_MANIFESTS}"
-  kubectl_cmd apply -k "${KRAKEND_MANIFESTS}"
+  kubectl_apply_k "${KRAKEND_MANIFESTS}"
 }
 
 deploy_krakend_stack() {
@@ -718,7 +718,7 @@ apply_observability_connection_config() {
   fi
 
   log_info "applying otel-connection ConfigMap from ${OBSERVABILITY_MANIFESTS}"
-  kubectl_cmd apply -k "${OBSERVABILITY_MANIFESTS}"
+  kubectl_apply_k "${OBSERVABILITY_MANIFESTS}"
 }
 
 deploy_observability_stack() {
