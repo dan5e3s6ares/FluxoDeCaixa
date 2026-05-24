@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-STREAM_NAME = "lancamentos.events"
+STREAM_NAME = "lancamentos_events"
 CONSUMER_NAME = "consolidado-workers"
 FILTER_SUBJECT = "lancamentos.lancamento_registrado.v1"
 FETCH_BATCH = 10

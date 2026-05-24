@@ -5,6 +5,12 @@ set -eu
 NATS_URL="${NATS_URL:-nats://nats.messaging.svc.cluster.local:4222}"
 export NATS_URL
 
+# JetStream stream names must not contain '.' (NATS naming rules); subjects keep dots.
+EVENTS_STREAM="${EVENTS_STREAM:-lancamentos_events}"
+DLQ_STREAM="${DLQ_STREAM:-lancamentos_dlq}"
+EVENT_SUBJECT="${EVENT_SUBJECT:-lancamentos.lancamento_registrado.v1}"
+CONSUMER_NAME="${CONSUMER_NAME:-consolidado-workers}"
+
 log() {
   echo "[nats-bootstrap] $*"
 }
@@ -14,15 +20,16 @@ wait_for_nats() {
   local max="${NATS_WAIT_ATTEMPTS:-60}"
   local delay="${NATS_WAIT_DELAY:-2}"
   while [ "${attempt}" -le "${max}" ]; do
-    if nats server check connection 2>/dev/null; then
-      log "connected to ${NATS_URL}"
+    if nats server check connection 2>/dev/null \
+      && nats server check jetstream 2>/dev/null; then
+      log "connected to ${NATS_URL} (JetStream ready)"
       return 0
     fi
     log "waiting for NATS (${attempt}/${max})..."
     sleep "${delay}"
     attempt=$((attempt + 1))
   done
-  log "NATS not reachable at ${NATS_URL}"
+  log "NATS/JetStream not reachable at ${NATS_URL}"
   return 1
 }
 
@@ -35,13 +42,13 @@ consumer_exists() {
 }
 
 ensure_stream_lancamentos_events() {
-  if stream_exists lancamentos.events; then
-    log "stream lancamentos.events already exists"
+  if stream_exists "${EVENTS_STREAM}"; then
+    log "stream ${EVENTS_STREAM} already exists"
     return 0
   fi
-  log "creating stream lancamentos.events"
-  nats stream add lancamentos.events \
-    --subjects "lancamentos.lancamento_registrado.v1" \
+  log "creating stream ${EVENTS_STREAM}"
+  nats stream add "${EVENTS_STREAM}" \
+    --subjects "${EVENT_SUBJECT}" \
     --retention limits \
     --max-age 168h \
     --storage file \
@@ -54,13 +61,13 @@ ensure_stream_dlq() {
   # Business DLQ (lancamentos.dlq.>) plus JetStream advisories when consolidado-workers
   # exhausts max-deliver (doc 03: 3 retries → DLQ lancamentos.dlq).
   local dlq_subjects
-  dlq_subjects="lancamentos.dlq.>,\$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.lancamentos.events.consolidado-workers,\$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.lancamentos.events.consolidado-workers"
-  if stream_exists lancamentos.dlq; then
-    log "stream lancamentos.dlq already exists"
+  dlq_subjects="lancamentos.dlq.>,\$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.${EVENTS_STREAM}.${CONSUMER_NAME},\$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.${EVENTS_STREAM}.${CONSUMER_NAME}"
+  if stream_exists "${DLQ_STREAM}"; then
+    log "stream ${DLQ_STREAM} already exists"
     return 0
   fi
-  log "creating stream lancamentos.dlq"
-  nats stream add lancamentos.dlq \
+  log "creating stream ${DLQ_STREAM}"
+  nats stream add "${DLQ_STREAM}" \
     --subjects "${dlq_subjects}" \
     --retention limits \
     --max-age 720h \
@@ -71,28 +78,21 @@ ensure_stream_dlq() {
 }
 
 ensure_consumer_consolidado_workers() {
-  if consumer_exists lancamentos.events consolidado-workers; then
-    log "consumer consolidado-workers already exists"
+  if consumer_exists "${EVENTS_STREAM}" "${CONSUMER_NAME}"; then
+    log "consumer ${CONSUMER_NAME} already exists"
     return 0
   fi
-  log "creating durable consumer consolidado-workers"
+  log "creating durable consumer ${CONSUMER_NAME}"
   # Backoff 1s, 5s, 30s per doc 03; max-deliver 3 routes failures to lancamentos.dlq advisories.
-  local cfg
-  cfg="$(mktemp)"
-  cat >"${cfg}" <<'EOF'
-{
-  "ack_policy": "explicit",
-  "deliver_policy": "all",
-  "ack_wait": "1s",
-  "max_deliver": 3,
-  "backoff": ["1s", "5s", "30s"],
-  "replay_policy": "instant"
-}
-EOF
-  nats consumer add lancamentos.events consolidado-workers \
+  nats consumer add "${EVENTS_STREAM}" "${CONSUMER_NAME}" \
     --pull \
-    --config "${cfg}"
-  rm -f "${cfg}"
+    --ack explicit \
+    --deliver all \
+    --max-deliver 3 \
+    --replay instant \
+    --wait 1s \
+    --filter "${EVENT_SUBJECT}" \
+    --defaults
 }
 
 main() {
@@ -102,7 +102,7 @@ main() {
   ensure_consumer_consolidado_workers
   log "bootstrap complete"
   nats stream ls
-  nats consumer ls lancamentos.events
+  nats consumer ls "${EVENTS_STREAM}"
 }
 
 main "$@"

@@ -90,7 +90,7 @@ nats_stream_lancamentos_events_exists() {
   kubectl_cmd -n "${NATS_NAMESPACE}" run nats-stream-check --rm -i --restart=Never \
     --image=natsio/nats-box:0.14.3 \
     --env="NATS_URL=nats://nats.${NATS_NAMESPACE}.svc.cluster.local:4222" \
-    --command -- nats stream info lancamentos.events >/dev/null 2>&1
+    --command -- nats stream info lancamentos_events >/dev/null 2>&1
 }
 
 check_nats() {
@@ -99,7 +99,7 @@ check_nats() {
   retry "${READY_ATTEMPTS}" "${READY_DELAY}" nats_healthz_ok
   retry "${READY_ATTEMPTS}" "${READY_DELAY}" nats_bootstrap_complete
   retry "${READY_ATTEMPTS}" "${READY_DELAY}" nats_stream_lancamentos_events_exists
-  log_info "NATS healthy — :8222/healthz OK, stream lancamentos.events present"
+  log_info "NATS healthy — :8222/healthz OK, stream lancamentos_events present"
 }
 
 postgres_cluster_healthy() {
