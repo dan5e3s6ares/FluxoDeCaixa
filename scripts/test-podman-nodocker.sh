@@ -53,6 +53,24 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh missing GITEA_TOKEN repo secret skip guard"
     failures=$((failures + 1))
   fi
+  if grep -qE 'act_runner-.*\.tar\.gz' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must download act_runner .xz archives (tar.gz URLs return 404)"
+    failures=$((failures + 1))
+  elif grep -q 'act_runner-.*\.xz' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh downloads act_runner .xz release archive"
+  else
+    log_error "deploy-gitea.sh missing act_runner .xz download URL"
+    failures=$((failures + 1))
+  fi
+  if grep -q "trap 'rm -rf \"\${tmp" "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must not use EXIT traps that reference local tmp (set -u unbound variable on failure)"
+    failures=$((failures + 1))
+  elif grep -q 'trap "rm -rf '"'"'${tmp}' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh embeds tmp paths in EXIT traps"
+  else
+    log_error "deploy-gitea.sh missing embedded-path EXIT trap for act_runner download"
+    failures=$((failures + 1))
+  fi
 }
 
 test_nodocker_wired_in_scripts() {

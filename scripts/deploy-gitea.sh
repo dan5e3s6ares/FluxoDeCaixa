@@ -45,7 +45,7 @@ GITEA_TOKEN_NAME="${GITEA_TOKEN_NAME:-fluxo-caixa-deploy}"
 HARBOR_ADMIN_USER="${HARBOR_ADMIN_USER:-admin}"
 HARBOR_ADMIN_PASSWORD="${HARBOR_ADMIN_PASSWORD:-Harbor12345}"
 
-GITEA_RUNNER_VERSION="${GITEA_RUNNER_VERSION:-0.2.11}"
+GITEA_RUNNER_VERSION="${GITEA_RUNNER_VERSION:-0.2.13}"
 GITEA_RUNNER_NAME="${GITEA_RUNNER_NAME:-fluxo-caixa-vm}"
 GITEA_RUNNER_DIR="${GITEA_RUNNER_DIR:-/opt/act_runner}"
 GITEA_RUNNER_LABELS="${GITEA_RUNNER_LABELS:-self-hosted,linux,x64}"
@@ -461,11 +461,11 @@ configure_repo_secrets() {
 
 download_act_runner() {
   local arch="linux-amd64"
-  local tarball="act_runner-${GITEA_RUNNER_VERSION}-${arch}.tar.gz"
-  local url="https://gitea.com/gitea/act_runner/releases/download/v${GITEA_RUNNER_VERSION}/${tarball}"
+  local archive="act_runner-${GITEA_RUNNER_VERSION}-${arch}.xz"
+  local url="https://gitea.com/gitea/act_runner/releases/download/v${GITEA_RUNNER_VERSION}/${archive}"
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp}"' EXIT
+  trap "rm -rf '${tmp}'" EXIT
 
   if [[ -x "${GITEA_RUNNER_DIR}/act_runner" ]]; then
     log_info "act_runner binary already present"
@@ -475,9 +475,16 @@ download_act_runner() {
   fi
 
   log_info "downloading act_runner v${GITEA_RUNNER_VERSION}..."
-  curl -fsSL "${url}" -o "${tmp}/${tarball}"
+  curl -fsSL "${url}" -o "${tmp}/${archive}"
   run_as_root mkdir -p "${GITEA_RUNNER_DIR}"
-  tar -xzf "${tmp}/${tarball}" -C "${tmp}"
+  python3 - "${tmp}/${archive}" "${tmp}/act_runner" <<'PY'
+import lzma
+import sys
+
+archive, dest = sys.argv[1], sys.argv[2]
+with lzma.open(archive) as xz_stream, open(dest, "wb") as out:
+    out.write(xz_stream.read())
+PY
   run_as_root install -m 0755 "${tmp}/act_runner" "${GITEA_RUNNER_DIR}/act_runner"
   rm -rf "${tmp}"
   trap - EXIT
@@ -596,7 +603,7 @@ verify_git_push() {
   local auth_remote tmp_dir
   auth_remote="$(gitea_auth_git_remote)"
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "${tmp_dir}"' EXIT
+  trap "rm -rf '${tmp_dir}'" EXIT
 
   gitea_git clone --depth 1 "${auth_remote}" "${tmp_dir}/repo" >/dev/null 2>&1
   printf 'deploy-gitea acceptance %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${tmp_dir}/repo/.gitea-deploy-check"
