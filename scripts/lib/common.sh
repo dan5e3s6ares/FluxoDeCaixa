@@ -49,6 +49,21 @@ retry() {
   done
 }
 
+# Suppress podman-docker "Emulate Docker CLI using podman" message (requires run_as_root).
+ensure_podman_nodocker() {
+  if [[ -f /etc/containers/nodocker ]]; then
+    log_info "unchanged: /etc/containers/nodocker"
+    return 0
+  fi
+  if ! declare -f run_as_root >/dev/null 2>&1; then
+    log_warn "run_as_root unavailable; skip /etc/containers/nodocker"
+    return 0
+  fi
+  run_as_root mkdir -p /etc/containers
+  run_as_root touch /etc/containers/nodocker
+  log_info "created /etc/containers/nodocker (quiet podman-docker emulation message)"
+}
+
 ensure_helm() {
   if command -v helm >/dev/null 2>&1; then
     log_info "helm already installed"

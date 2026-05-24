@@ -183,6 +183,7 @@ ensure_container_runtime() {
       run_as_root systemctl enable --now podman.socket 2>/dev/null || true
     fi
     if docker info >/dev/null 2>&1; then
+      ensure_podman_nodocker
       log_info "podman-docker runtime ready"
       return 0
     fi

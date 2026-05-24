@@ -77,11 +77,12 @@ install_make() {
 install_podman() {
   if command -v podman >/dev/null 2>&1; then
     log_info "podman already installed"
-    return 0
+  else
+    log_info "installing podman..."
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y -qq podman
   fi
-  log_info "installing podman..."
-  run_as_root apt-get update -qq
-  run_as_root apt-get install -y -qq podman
+  ensure_podman_nodocker
 }
 
 install_uv() {
