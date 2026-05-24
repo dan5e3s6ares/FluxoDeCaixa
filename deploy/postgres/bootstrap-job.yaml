@@ -36,6 +36,16 @@ spec:
                 secretKeyRef:
                   name: fluxo-pg-app
                   key: password
+            - name: PGSUPERUSER
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-pg-superuser
+                  key: username
+            - name: PGSUPERPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fluxo-pg-superuser
+                  key: password
             - name: PG_WAIT_ATTEMPTS
               value: "60"
             - name: PG_WAIT_DELAY

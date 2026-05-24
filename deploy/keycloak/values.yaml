@@ -1,5 +1,6 @@
 # Keycloak — doc 07 (namespace security, realm fluxo-caixa via bootstrap Job)
-# Same bitnamilegacy workaround as deploy/redis/values.yaml (embedded PostgreSQL subchart).
+# Uses shared CNPG PostgreSQL (fluxo-pg) instead of the embedded subchart — faster
+# make start on dev VMs and avoids a second PostgreSQL pod in security/.
 global:
   security:
     allowInsecureImages: true
@@ -15,8 +16,8 @@ auth:
 production: true
 proxy: edge
 
-# Production Keycloak + embedded PostgreSQL can take several minutes on a dev VM;
-# startupProbe avoids helm --wait hanging while readinessProbe flaps early.
+# Keycloak production boot can take several minutes on a dev VM; startupProbe keeps
+# helm --wait from failing while readinessProbe checks /realms/master too early.
 startupProbe:
   enabled: true
   initialDelaySeconds: 30
@@ -57,28 +58,13 @@ metrics:
   enabled: false
 
 postgresql:
-  enabled: true
-  image:
-    repository: bitnamilegacy/postgresql
-  volumePermissions:
-    image:
-      repository: bitnamilegacy/os-shell
-  auth:
-    existingSecret: fluxo-keycloak
-    username: keycloak
-    secretKeys:
-      userPasswordKey: postgres-password
-      adminPasswordKey: postgres-password
-    database: keycloak
-  primary:
-    persistence:
-      enabled: true
-      size: 2Gi
-      storageClass: local-path
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
+  enabled: false
+
+externalDatabase:
+  host: fluxo-pg-rw.database.svc.cluster.local
+  port: 5432
+  user: fluxo
+  database: keycloak
+  existingSecret: fluxo-keycloak
+  existingSecretUserKey: db-user
+  existingSecretPasswordKey: db-password

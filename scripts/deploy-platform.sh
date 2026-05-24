@@ -403,25 +403,61 @@ deploy_redis_stack() {
   log_info "Redis ready — standalone cache (256MB allkeys-lru, no persistence)"
 }
 
+fluxo_pg_app_secret_ready() {
+  kubectl_cmd -n "${POSTGRES_NAMESPACE}" get secret fluxo-pg-app >/dev/null 2>&1
+}
+
 keycloak_auth_secret_ready() {
   kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get secret fluxo-keycloak >/dev/null 2>&1
 }
 
+keycloak_db_credentials_present() {
+  local user password
+  user="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get secret fluxo-keycloak \
+    -o jsonpath='{.data.db-user}' 2>/dev/null || true)"
+  password="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get secret fluxo-keycloak \
+    -o jsonpath='{.data.db-password}' 2>/dev/null || true)"
+  [[ -n "${user}" && -n "${password}" ]]
+}
+
+read_fluxo_pg_app_credentials() {
+  FLUXO_PG_APP_USER="$(kubectl_cmd -n "${POSTGRES_NAMESPACE}" get secret fluxo-pg-app \
+    -o jsonpath='{.data.username}' | base64 -d)"
+  FLUXO_PG_APP_PASSWORD="$(kubectl_cmd -n "${POSTGRES_NAMESPACE}" get secret fluxo-pg-app \
+    -o jsonpath='{.data.password}' | base64 -d)"
+}
+
+patch_keycloak_db_credentials() {
+  local encoded_user encoded_password
+  encoded_user="$(printf '%s' "${FLUXO_PG_APP_USER}" | base64 -w 0 2>/dev/null || printf '%s' "${FLUXO_PG_APP_USER}" | base64)"
+  encoded_password="$(printf '%s' "${FLUXO_PG_APP_PASSWORD}" | base64 -w 0 2>/dev/null || printf '%s' "${FLUXO_PG_APP_PASSWORD}" | base64)"
+  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" patch secret fluxo-keycloak --type merge \
+    -p "{\"data\":{\"db-user\":\"${encoded_user}\",\"db-password\":\"${encoded_password}\"}}"
+}
+
 ensure_keycloak_auth_secret() {
+  log_info "waiting for CNPG app secret fluxo-pg-app in ${POSTGRES_NAMESPACE}..."
+  retry "${POSTGRES_READY_ATTEMPTS}" "${POSTGRES_READY_DELAY}" fluxo_pg_app_secret_ready
+  read_fluxo_pg_app_credentials
+
   if keycloak_auth_secret_ready; then
-    log_info "secret exists: fluxo-keycloak (${KEYCLOAK_NAMESPACE})"
+    if keycloak_db_credentials_present; then
+      log_info "secret exists: fluxo-keycloak (${KEYCLOAK_NAMESPACE})"
+      return 0
+    fi
+    log_info "patching fluxo-keycloak with CNPG database credentials"
+    patch_keycloak_db_credentials
     return 0
   fi
 
-  local admin_password postgres_password
+  local admin_password
   admin_password="${KEYCLOAK_ADMIN_PASSWORD:-$(openssl rand -base64 24)}"
-  postgres_password="${KEYCLOAK_POSTGRES_PASSWORD:-$(openssl rand -base64 24)}"
 
   log_info "creating secret fluxo-keycloak in ${KEYCLOAK_NAMESPACE}"
   kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" create secret generic fluxo-keycloak \
     --from-literal=admin-password="${admin_password}" \
-    --from-literal=postgres-password="${postgres_password}" \
-    --from-literal=password="${postgres_password}"
+    --from-literal=db-user="${FLUXO_PG_APP_USER}" \
+    --from-literal=db-password="${FLUXO_PG_APP_PASSWORD}"
 }
 
 keycloak_pods_ready() {
@@ -504,7 +540,7 @@ run_keycloak_bootstrap() {
 deploy_keycloak_stack() {
   deploy_keycloak_helm
   run_keycloak_bootstrap
-  log_info "Keycloak ready — realm fluxo-caixa imported (clients svc-lancamentos, svc-consolidado, svc-consulta, krakend)"
+  log_info "Keycloak ready — realm fluxo-caixa imported (external DB keycloak on fluxo-pg, clients svc-lancamentos, svc-consolidado, svc-consulta, krakend)"
 }
 
 krakend_pods_ready() {
