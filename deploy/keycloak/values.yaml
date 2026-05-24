@@ -15,6 +15,30 @@ auth:
 production: true
 proxy: edge
 
+# Production Keycloak + embedded PostgreSQL can take several minutes on a dev VM;
+# startupProbe avoids helm --wait hanging while readinessProbe flaps early.
+startupProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 60
+  successThreshold: 1
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+  successThreshold: 1
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
 resources:
   requests:
     cpu: 250m
