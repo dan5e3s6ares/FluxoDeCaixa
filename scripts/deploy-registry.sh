@@ -479,12 +479,20 @@ reset_harbor_admin_password() {
   load_harbor_admin_credentials
   harbor_container_running "${db_container}" || return 1
 
+  if ! wait_for_harbor_registry_db; then
+    log_error "Harbor registry database not ready for admin password reset"
+    return 1
+  fi
+
   read -r salt digest < <(python3 "${hash_script}" "${HARBOR_ADMIN_PASSWORD}")
   sql="UPDATE harbor_user SET salt='${salt}', password='${digest}' WHERE user_id=1;"
 
   log_info "resetting Harbor admin password in registry DB to match harbor.yml..."
-  run_as_root docker exec -i "${db_container}" psql -U postgres -d registry -v ON_ERROR_STOP=1 \
-    -c "${sql}"
+  if ! run_as_root docker exec -i "${db_container}" psql -U postgres -d registry -v ON_ERROR_STOP=1 \
+    -c "${sql}"; then
+    log_error "Harbor admin password reset failed (registry DB update)"
+    return 1
+  fi
 
   if harbor_container_running "${core_container}"; then
     log_info "restarting ${core_container} after admin password reset..."

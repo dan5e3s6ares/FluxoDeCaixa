@@ -192,6 +192,28 @@ harbor_container_running() {
   return 1
 }
 
+harbor_registry_db_ready() {
+  local db_container="${HARBOR_DB_CONTAINER:-harbor-db}"
+  local has_db has_table
+
+  harbor_container_running "${db_container}" || return 1
+
+  has_db="$(run_as_root docker exec "${db_container}" psql -U postgres -d postgres -tAc \
+    "SELECT 1 FROM pg_database WHERE datname='registry'" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "${has_db}" == "1" ]] || return 1
+
+  has_table="$(run_as_root docker exec "${db_container}" psql -U postgres -d registry -tAc \
+    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='harbor_user'" \
+    2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "${has_table}" == "1" ]] || return 1
+  return 0
+}
+
+wait_for_harbor_registry_db() {
+  log_info "waiting for Harbor registry database (harbor-db)..."
+  retry "${HARBOR_READY_ATTEMPTS:-60}" "${HARBOR_READY_DELAY:-5}" harbor_registry_db_ready
+}
+
 load_harbor_admin_credentials_from_core() {
   local container="${HARBOR_CORE_CONTAINER:-harbor-core}"
   local pw
