@@ -233,7 +233,7 @@ run_nats_bootstrap() {
 deploy_nats_stack() {
   deploy_nats_helm
   run_nats_bootstrap
-  log_info "JetStream streams/consumers provisioned (lancamentos.events, lancamentos.dlq, consolidado-workers)"
+  log_info "JetStream streams/consumers provisioned (lancamentos_events, lancamentos_dlq, consolidado-workers)"
 }
 
 deploy_cnpg_operator() {
