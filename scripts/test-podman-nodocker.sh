@@ -28,6 +28,15 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh missing gitea_admin_username_reserved guard"
     failures=$((failures + 1))
   fi
+  if grep -q 'https://oauth2:' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must use HTTP (not HTTPS) for in-VM Gitea git remotes"
+    failures=$((failures + 1))
+  elif grep -q 'gitea_auth_git_remote' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh builds git remotes from GITEA_BASE_URL scheme"
+  else
+    log_error "deploy-gitea.sh missing gitea_auth_git_remote helper"
+    failures=$((failures + 1))
+  fi
 }
 
 test_nodocker_wired_in_scripts() {

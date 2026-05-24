@@ -216,6 +216,14 @@ gitea_auth_header() {
   printf 'Authorization: token %s' "${GITEA_ADMIN_TOKEN}"
 }
 
+gitea_auth_git_remote() {
+  # In-VM Gitea listens on plain HTTP (GITEA_BASE_URL); HTTPS causes TLS handshake errors.
+  local scheme="${GITEA_BASE_URL%%://*}"
+  printf '%s://oauth2:%s@%s:%s/%s/%s.git' \
+    "${scheme}" "${GITEA_TOKEN}" "${GITEA_ALIAS}" "${GITEA_PORT}" \
+    "${GITEA_REPO_OWNER}" "${GITEA_REPO_NAME}"
+}
+
 gitea_api() {
   local method="$1"
   local path="$2"
@@ -399,7 +407,8 @@ ensure_repo() {
 
 bootstrap_repo_git() {
   local remote_name="gitea-bootstrap"
-  local auth_remote="https://oauth2:${GITEA_TOKEN}@${GITEA_ALIAS}:${GITEA_PORT}/${GITEA_REPO_OWNER}/${GITEA_REPO_NAME}.git"
+  local auth_remote
+  auth_remote="$(gitea_auth_git_remote)"
   local head_sha remote_head
 
   require_cmd git
@@ -580,7 +589,7 @@ EOF
 
 verify_git_push() {
   local auth_remote tmp_dir
-  auth_remote="https://oauth2:${GITEA_TOKEN}@${GITEA_ALIAS}:${GITEA_PORT}/${GITEA_REPO_OWNER}/${GITEA_REPO_NAME}.git"
+  auth_remote="$(gitea_auth_git_remote)"
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir}"' EXIT
 
