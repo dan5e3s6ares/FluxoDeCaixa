@@ -1,9 +1,13 @@
-.PHONY: start stop status test test-e2e clean help logs restart
+.PHONY: start stop status test test-e2e clean help logs restart vm-up vm-shell
 
 CLUSTER_TYPE ?= k3s
 ENV ?= dev
 SVC ?=
 KRAKEND_NODEPORT ?= 30443
+VM_NAME ?= minha-vm
+VM_MEMORY ?= 18G
+VM_DISK ?= 120G
+VM_CPUS ?= 8
 export CLUSTER_TYPE ENV KRAKEND_NODEPORT
 
 start:
@@ -41,6 +45,15 @@ logs:
 
 restart:
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/restart-svc.sh $(SVC)
+
+# Multipass: recria VM, clona FluxoDeCaixa e roda make start (host precisa ter multipass).
+# VM_SHELL=1 make vm-up — ao final abre shell interativo na VM (TTY).
+vm-up:
+	VM_NAME=$(VM_NAME) VM_MEMORY=$(VM_MEMORY) VM_DISK=$(VM_DISK) VM_CPUS=$(VM_CPUS) \
+		VM_SHELL=$(VM_SHELL) ./scripts/multipass-fluxo-vm.sh
+
+vm-shell:
+	multipass shell $(VM_NAME)
 
 help:
 	@grep -E '^[a-zA-Z_-]+:' Makefile | sed 's/://'
