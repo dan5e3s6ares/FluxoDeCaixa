@@ -229,6 +229,7 @@ install_harbor() {
   fi
 
   ensure_container_runtime
+  configure_podman_registries
   download_harbor_installer
 
   run_as_root mkdir -p "${HARBOR_DATA_VOLUME}"
