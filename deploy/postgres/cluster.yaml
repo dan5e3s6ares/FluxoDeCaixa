@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/name: fluxo-pg
     app.kubernetes.io/part-of: fluxo-caixa
 spec:
+  # pg-bootstrap Job connects as postgres to CREATE DATABASE keycloak (doc 07 / Keycloak).
+  enableSuperuserAccess: true
   instances: 1
   imageName: ghcr.io/cloudnative-pg/postgresql:16.4-1
   storage:
