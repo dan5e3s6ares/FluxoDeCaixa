@@ -9,32 +9,11 @@ source "${SCRIPT_DIR}/lib/common.sh"
 failures=0
 
 patch_compose_sample() {
-  python3 - "$1" <<'PY'
-import re
-import sys
-
-path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
-    lines = fh.readlines()
-
-out = []
-skip = False
-removed = 0
-for line in lines:
-    if re.match(r"^    logging:\s*$", line):
-        skip = True
-        removed += 1
-        continue
-    if skip:
-        if re.match(r"^      ", line):
-            continue
-        skip = False
-    out.append(line)
-
-with open(path, "w", encoding="utf-8") as fh:
-    fh.writelines(out)
-print(removed)
-PY
+  local compose="$1"
+  local count
+  count="$(grep -c '    logging:' "${compose}" 2>/dev/null || true)"
+  python3 "${SCRIPT_DIR}/lib/patch-harbor-compose.py" "${compose}" >/dev/null
+  echo "${count:-0}"
 }
 
 test_removes_syslog_logging_blocks() {
