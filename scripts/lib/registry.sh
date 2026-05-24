@@ -182,7 +182,14 @@ load_harbor_admin_credentials() {
 harbor_container_running() {
   local name="$1"
   command -v docker >/dev/null 2>&1 || return 1
-  docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${name}"
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${name}"; then
+    return 0
+  fi
+  if declare -F run_as_root >/dev/null 2>&1; then
+    run_as_root docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${name}"
+    return $?
+  fi
+  return 1
 }
 
 load_harbor_admin_credentials_from_core() {
@@ -200,13 +207,71 @@ load_harbor_admin_credentials_from_core() {
   return 0
 }
 
-harbor_admin_auth_ok() {
-  local code auth
-  auth="$(harbor_auth_header)"
+harbor_tls_ca_file() {
+  local ca="${HARBOR_CERTS_DIR:-/opt/harbor/certs}/ca.crt"
+  if [[ -f "${ca}" ]]; then
+    printf '%s\n' "${ca}"
+    return 0
+  fi
+  if [[ -f "${HARBOR_CA_CERT:-}" ]]; then
+    printf '%s\n' "${HARBOR_CA_CERT}"
+    return 0
+  fi
+  return 1
+}
+
+harbor_https_api_bases() {
+  printf '%s\n' \
+    "https://${HARBOR_ALIAS}:443" \
+    "https://${HARBOR_ALIAS}"
+}
+
+harbor_api_auth_redirects_to_https() {
+  local base="${HARBOR_API_BASE:-}" code
+  [[ -n "${base}" && "${base}" == http://* ]] || return 1
   code="$(curl -s -o /dev/null -w '%{http_code}' \
-    -H "${auth}" \
-    "$(harbor_api_url "/api/v2.0/users/current")" 2>/dev/null || echo "000")"
-  [[ "${code}" == "200" ]]
+    "${base}/api/v2.0/users/current" 2>/dev/null || echo "000")"
+  [[ "${code}" == "308" || "${code}" == "301" || "${code}" == "302" || "${code}" == "307" ]]
+}
+
+harbor_upgrade_api_base_to_https() {
+  local base ca code
+  harbor_tls_ca_file >/dev/null 2>&1 || return 1
+  ca="$(harbor_tls_ca_file)"
+  while IFS= read -r base; do
+    [[ -n "${base}" ]] || continue
+    if curl -fsS --cacert "${ca}" "${base}/api/v2.0/systeminfo" >/dev/null 2>&1; then
+      HARBOR_API_BASE="${base}"
+      return 0
+    fi
+  done < <(harbor_https_api_bases)
+  return 1
+}
+
+harbor_admin_auth_ok() {
+  local base auth code ca ca_opt=()
+  auth="$(harbor_auth_header)"
+  if ca="$(harbor_tls_ca_file 2>/dev/null)"; then
+    ca_opt=(--cacert "${ca}")
+  fi
+  while IFS= read -r base; do
+    [[ -n "${base}" ]] || continue
+    code="$(curl -s -o /dev/null -w '%{http_code}' \
+      "${ca_opt[@]}" \
+      -H "${auth}" \
+      "${base}/api/v2.0/users/current" 2>/dev/null || echo "000")"
+    if [[ "${code}" == "200" ]]; then
+      HARBOR_API_BASE="${base}"
+      return 0
+    fi
+  done < <(
+    if [[ -n "${HARBOR_API_BASE:-}" ]]; then
+      printf '%s\n' "${HARBOR_API_BASE}"
+    fi
+    harbor_https_api_bases
+    harbor_api_bases
+  )
+  return 1
 }
 
 harbor_api_bases() {
@@ -244,6 +309,9 @@ harbor_api_ready() {
 resolve_harbor_api_base() {
   if harbor_api_ready; then
     sync_harbor_registry_endpoint
+    if harbor_api_auth_redirects_to_https && harbor_upgrade_api_base_to_https; then
+      log_info "Harbor API auth uses HTTPS (${HARBOR_API_BASE})"
+    fi
     return 0
   fi
   return 1
