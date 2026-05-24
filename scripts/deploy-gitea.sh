@@ -569,18 +569,40 @@ EOF
   fi
 }
 
+count_online_runners() {
+  # Instance-level runners (admin registration token) appear on /admin/actions/runners,
+  # not on the repo-scoped /repos/.../actions/runners endpoint.
+  gitea_api GET "/admin/actions/runners" \
+    | python3 -c "import sys,json; name='${GITEA_RUNNER_NAME}'; rs=json.load(sys.stdin).get('runners',[]); print(sum(1 for r in rs if r.get('status')=='online' and (not name or r.get('name')==name)))" 2>/dev/null \
+    || echo "0"
+}
+
 runner_is_online() {
   local count
-  count="$(gitea_api GET "/repos/${GITEA_REPO_OWNER}/${GITEA_REPO_NAME}/actions/runners" \
-    | python3 -c "import sys,json; rs=json.load(sys.stdin).get('runners',[]); print(sum(1 for r in rs if r.get('status')=='online'))" 2>/dev/null \
-    || echo "0")"
+  count="$(count_online_runners)"
   [[ "${count}" -ge 1 ]]
 }
 
+log_runner_diagnostics() {
+  local runners_json
+  runners_json="$(gitea_api GET "/admin/actions/runners" 2>/dev/null \
+    | python3 -c "import sys,json; rs=json.load(sys.stdin).get('runners',[]); print(', '.join(f\"{r.get('name','?')}:{r.get('status','?')}\" for r in rs) or 'none')" 2>/dev/null \
+    || echo "unavailable")"
+  log_error "Actions runner not online after ${GITEA_RUNNER_READY_ATTEMPTS} attempts (admin runners: ${runners_json})"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --no-pager -l status "${GITEA_RUNNER_SERVICE}" 2>&1 | tail -20 || true
+    journalctl -u "${GITEA_RUNNER_SERVICE}" --no-pager -n 20 2>/dev/null || true
+  fi
+}
+
 wait_for_runner_online() {
-  log_info "waiting for Actions runner online..."
-  retry "${GITEA_RUNNER_READY_ATTEMPTS}" "${GITEA_RUNNER_READY_DELAY}" runner_is_online
-  log_info "Actions runner is online"
+  log_info "waiting for Actions runner online (${GITEA_RUNNER_NAME})..."
+  if retry "${GITEA_RUNNER_READY_ATTEMPTS}" "${GITEA_RUNNER_READY_DELAY}" runner_is_online; then
+    log_info "Actions runner is online"
+    return 0
+  fi
+  log_runner_diagnostics
+  return 1
 }
 
 trigger_sample_workflow() {
