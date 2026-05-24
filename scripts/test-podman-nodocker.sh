@@ -71,6 +71,15 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh missing embedded-path EXIT trap for act_runner download"
     failures=$((failures + 1))
   fi
+  if grep -q "trap 'rm -f \"\${err_file}\"' RETURN" "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must not use RETURN traps that reference local err_file (set -u unbound variable on main return)"
+    failures=$((failures + 1))
+  elif grep -q 'trap "rm -f '"'"'${err_file}' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh embeds err_file path in RETURN trap"
+  else
+    log_error "deploy-gitea.sh missing embedded-path RETURN trap for admin bootstrap"
+    failures=$((failures + 1))
+  fi
   if grep -q 'fetch_runner_registration_token' "${SCRIPT_DIR}/deploy-gitea.sh" \
     && grep -q 'generate-runner-token' "${SCRIPT_DIR}/deploy-gitea.sh"; then
     log_info "OK deploy-gitea.sh falls back to gitea actions generate-runner-token for runner registration"
