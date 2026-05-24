@@ -37,6 +37,13 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh missing gitea_auth_git_remote helper"
     failures=$((failures + 1))
   fi
+  if grep -q 'gitea_git()' "${SCRIPT_DIR}/deploy-gitea.sh" \
+    && grep -q 'GIT_CONFIG_GLOBAL=/dev/null' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh ignores global http->https git URL rewrite for Gitea"
+  else
+    log_error "deploy-gitea.sh missing gitea_git helper (GIT_CONFIG_GLOBAL=/dev/null)"
+    failures=$((failures + 1))
+  fi
 }
 
 test_nodocker_wired_in_scripts() {
