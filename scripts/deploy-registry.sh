@@ -485,7 +485,7 @@ reset_harbor_admin_password() {
   fi
 
   read -r salt digest < <(python3 "${hash_script}" "${HARBOR_ADMIN_PASSWORD}")
-  sql="UPDATE harbor_user SET salt='${salt}', password='${digest}' WHERE user_id=1;"
+  sql="UPDATE harbor_user SET salt='${salt}', password='${digest}', password_version='sha256' WHERE user_id=1;"
 
   log_info "resetting Harbor admin password in registry DB to match harbor.yml..."
   if ! run_as_root docker exec -i "${db_container}" psql -U postgres -d registry -v ON_ERROR_STOP=1 \
@@ -497,6 +497,8 @@ reset_harbor_admin_password() {
   if harbor_container_running "${core_container}"; then
     log_info "restarting ${core_container} after admin password reset..."
     run_as_root docker restart "${core_container}" >/dev/null
+    log_info "waiting for Harbor API after ${core_container} restart..."
+    retry "${HARBOR_READY_ATTEMPTS}" "${HARBOR_READY_DELAY}" resolve_harbor_api_base
   fi
   return 0
 }
@@ -570,6 +572,12 @@ ensure_harbor_project() {
 }
 
 ensure_harbor_admin_auth() {
+  if [[ "${HARBOR_MODE}" == "in-vm" ]] \
+    && ! wait_for_harbor_registry_db; then
+    log_error "Harbor registry database not ready for admin auth"
+    return 1
+  fi
+
   load_harbor_admin_credentials
   if harbor_admin_auth_ok; then
     log_info "Harbor UI/API auth OK (admin user)"
@@ -584,6 +592,7 @@ ensure_harbor_admin_auth() {
 
   if [[ "${HARBOR_MODE}" == "in-vm" ]] \
     && reset_harbor_admin_password; then
+    resolve_harbor_api_base || true
     retry "${HARBOR_READY_ATTEMPTS}" "${HARBOR_READY_DELAY}" harbor_admin_auth_ok
     if harbor_admin_auth_ok; then
       log_info "Harbor UI/API auth OK after admin password reset"

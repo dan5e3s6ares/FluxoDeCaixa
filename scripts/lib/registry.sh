@@ -206,6 +206,11 @@ harbor_registry_db_ready() {
     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='harbor_user'" \
     2>/dev/null | tr -d '[:space:]' || true)"
   [[ "${has_table}" == "1" ]] || return 1
+
+  has_admin="$(run_as_root docker exec "${db_container}" psql -U postgres -d registry -tAc \
+    "SELECT 1 FROM harbor_user WHERE user_id=1 LIMIT 1" \
+    2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "${has_admin}" == "1" ]] || return 1
   return 0
 }
 
@@ -270,6 +275,33 @@ harbor_upgrade_api_base_to_https() {
   return 1
 }
 
+harbor_auth_api_bases() {
+  local base seen=$'\n'
+  if harbor_tls_ca_file >/dev/null 2>&1; then
+    while IFS= read -r base; do
+      [[ -n "${base}" ]] || continue
+      if [[ "${seen}" != *$'\n'"${base}"$'\n'* ]]; then
+        printf '%s\n' "${base}"
+        seen+="${base}"$'\n'
+      fi
+    done < <(harbor_https_api_bases)
+  fi
+  if [[ -n "${HARBOR_API_BASE:-}" ]]; then
+    base="${HARBOR_API_BASE}"
+    if [[ "${seen}" != *$'\n'"${base}"$'\n'* ]]; then
+      printf '%s\n' "${base}"
+      seen+="${base}"$'\n'
+    fi
+  fi
+  while IFS= read -r base; do
+    [[ -n "${base}" ]] || continue
+    if [[ "${seen}" != *$'\n'"${base}"$'\n'* ]]; then
+      printf '%s\n' "${base}"
+      seen+="${base}"$'\n'
+    fi
+  done < <(harbor_api_bases)
+}
+
 harbor_admin_auth_ok() {
   local base auth code ca ca_opt=()
   auth="$(harbor_auth_header)"
@@ -286,13 +318,7 @@ harbor_admin_auth_ok() {
       HARBOR_API_BASE="${base}"
       return 0
     fi
-  done < <(
-    if [[ -n "${HARBOR_API_BASE:-}" ]]; then
-      printf '%s\n' "${HARBOR_API_BASE}"
-    fi
-    harbor_https_api_bases
-    harbor_api_bases
-  )
+  done < <(harbor_auth_api_bases)
   return 1
 }
 
@@ -331,7 +357,9 @@ harbor_api_ready() {
 resolve_harbor_api_base() {
   if harbor_api_ready; then
     sync_harbor_registry_endpoint
-    if harbor_api_auth_redirects_to_https && harbor_upgrade_api_base_to_https; then
+    if harbor_upgrade_api_base_to_https; then
+      log_info "Harbor API auth uses HTTPS (${HARBOR_API_BASE})"
+    elif harbor_api_auth_redirects_to_https && harbor_upgrade_api_base_to_https; then
       log_info "Harbor API auth uses HTTPS (${HARBOR_API_BASE})"
     fi
     return 0
