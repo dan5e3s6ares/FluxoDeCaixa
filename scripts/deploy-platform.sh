@@ -57,6 +57,7 @@ KEYCLOAK_READY_ATTEMPTS="${KEYCLOAK_READY_ATTEMPTS:-90}"
 KEYCLOAK_READY_DELAY="${KEYCLOAK_READY_DELAY:-5}"
 KEYCLOAK_BOOTSTRAP_ATTEMPTS="${KEYCLOAK_BOOTSTRAP_ATTEMPTS:-90}"
 KEYCLOAK_BOOTSTRAP_DELAY="${KEYCLOAK_BOOTSTRAP_DELAY:-5}"
+KEYCLOAK_HELM_TIMEOUT="${KEYCLOAK_HELM_TIMEOUT:-20m}"
 
 OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
 OBSERVABILITY_MANIFESTS="${REPO_ROOT}/deploy/observability"
@@ -419,7 +420,8 @@ ensure_keycloak_auth_secret() {
   log_info "creating secret fluxo-keycloak in ${KEYCLOAK_NAMESPACE}"
   kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" create secret generic fluxo-keycloak \
     --from-literal=admin-password="${admin_password}" \
-    --from-literal=postgres-password="${postgres_password}"
+    --from-literal=postgres-password="${postgres_password}" \
+    --from-literal=password="${postgres_password}"
 }
 
 keycloak_pods_ready() {
@@ -469,7 +471,7 @@ deploy_keycloak_helm() {
     --version "${KEYCLOAK_CHART_VERSION}" \
     --values "${KEYCLOAK_VALUES}" \
     --wait \
-    --timeout 15m
+    --timeout "${KEYCLOAK_HELM_TIMEOUT}"
 
   wait_for_keycloak
 }
