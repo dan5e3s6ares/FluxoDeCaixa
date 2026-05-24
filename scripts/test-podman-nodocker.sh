@@ -44,6 +44,15 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh missing gitea_git helper (GIT_CONFIG_GLOBAL=/dev/null)"
     failures=$((failures + 1))
   fi
+  if grep -q 'ensure_repo_secret "GITEA_TOKEN"' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must not set GITEA_TOKEN repo secret (Gitea forbids GITEA_/GITHUB_ prefix)"
+    failures=$((failures + 1))
+  elif grep -q 'skipping GITEA_TOKEN repo secret' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh skips forbidden GITEA_TOKEN repo secret"
+  else
+    log_error "deploy-gitea.sh missing GITEA_TOKEN repo secret skip guard"
+    failures=$((failures + 1))
+  fi
 }
 
 test_nodocker_wired_in_scripts() {

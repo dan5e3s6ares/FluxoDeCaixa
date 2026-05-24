@@ -442,19 +442,19 @@ bootstrap_repo_git() {
 ensure_repo_secret() {
   local name="$1"
   local value="$2"
-  local payload b64
-
-  b64="$(printf '%s' "${value}" | base64 -w0 2>/dev/null || printf '%s' "${value}" | base64)"
-  payload="{\"data\":\"${b64}\"}"
+  local payload
 
   log_info "configuring repo secret: ${name}"
+  payload="$(GITEA_SECRET_VALUE="${value}" python3 -c 'import json, os; print(json.dumps({"data": os.environ["GITEA_SECRET_VALUE"]}))')"
   curl -fsS -H "$(gitea_auth_header)" -H "Content-Type: application/json" \
     -X PUT "${GITEA_API_URL}/repos/${GITEA_REPO_OWNER}/${GITEA_REPO_NAME}/actions/secrets/${name}" \
     -d "${payload}" >/dev/null
 }
 
 configure_repo_secrets() {
-  ensure_repo_secret "GITEA_TOKEN" "${GITEA_TOKEN}"
+  # Gitea rejects secret names with a GITEA_ or GITHUB_ prefix (services/secrets/validation.go).
+  # Workflows still receive GITEA_TOKEN from the Actions runtime (ephemeral task token).
+  log_info "skipping GITEA_TOKEN repo secret (auto-injected by Gitea Actions)"
   ensure_repo_secret "HARBOR_USERNAME" "${HARBOR_ADMIN_USER}"
   ensure_repo_secret "HARBOR_PASSWORD" "${HARBOR_ADMIN_PASSWORD}"
 }
