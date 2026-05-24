@@ -32,27 +32,6 @@ load_seed_env() {
   load_harbor_admin_credentials
 }
 
-ensure_harbor_project() {
-  local project_id auth api_url
-  auth="$(harbor_auth_header)"
-  api_url="$(harbor_api_url "/api/v2.0/projects?project_name=${HARBOR_PROJECT}")"
-
-  project_id="$(curl -fsS -H "${auth}" "${api_url}" \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['project_id'] if d else '')" 2>/dev/null || true)"
-
-  if [[ -n "${project_id}" ]]; then
-    log_info "Harbor project exists: ${HARBOR_PROJECT} (id=${project_id})"
-    return 0
-  fi
-
-  log_info "creating Harbor project: ${HARBOR_PROJECT}"
-  curl -fsS -H "${auth}" \
-    -X POST "$(harbor_api_url "/api/v2.0/projects")" \
-    -H "Content-Type: application/json" \
-    -d "{\"project_name\":\"${HARBOR_PROJECT}\",\"public\":false,\"metadata\":{\"public\":\"false\"}}"
-  log_info "Harbor project created: ${HARBOR_PROJECT}"
-}
-
 wait_for_harbor() {
   log_info "waiting for Harbor API (${HARBOR_ALIAS}:${HARBOR_PORT})..."
   retry "${SEED_READY_ATTEMPTS}" "${SEED_READY_DELAY}" resolve_harbor_api_base
@@ -89,10 +68,11 @@ detect_seed_tag() {
 harbor_image_exists() {
   local image_name="$1"
   local tag="$2"
-  local auth code
+  local auth code tls_opt=()
 
+  harbor_curl_ca_opt tls_opt
   auth="$(harbor_auth_header)"
-  code="$(curl -s -o /dev/null -w '%{http_code}' \
+  code="$(curl -s "${tls_opt[@]}" -o /dev/null -w '%{http_code}' \
     -H "${auth}" \
     "$(harbor_api_url "/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${image_name}/artifacts/${tag}")" \
     || echo "000")"

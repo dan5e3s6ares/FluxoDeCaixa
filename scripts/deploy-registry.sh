@@ -550,27 +550,6 @@ wait_for_harbor() {
   log_info "Harbor API is ready at ${HARBOR_API_BASE}"
 }
 
-ensure_harbor_project() {
-  local project_id auth api_url
-  auth="$(harbor_auth_header)"
-  api_url="$(harbor_api_url "/api/v2.0/projects?project_name=${HARBOR_PROJECT}")"
-
-  project_id="$(curl -fsS -H "${auth}" "${api_url}" \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['project_id'] if d else '')" 2>/dev/null || true)"
-
-  if [[ -n "${project_id}" ]]; then
-    log_info "Harbor project exists: ${HARBOR_PROJECT} (id=${project_id})"
-    return 0
-  fi
-
-  log_info "creating Harbor project: ${HARBOR_PROJECT}"
-  curl -fsS -H "${auth}" \
-    -X POST "$(harbor_api_url "/api/v2.0/projects")" \
-    -H "Content-Type: application/json" \
-    -d "{\"project_name\":\"${HARBOR_PROJECT}\",\"public\":false,\"metadata\":{\"public\":\"false\"}}"
-  log_info "Harbor project created: ${HARBOR_PROJECT}"
-}
-
 ensure_harbor_admin_auth() {
   if [[ "${HARBOR_MODE}" == "in-vm" ]] \
     && ! wait_for_harbor_registry_db; then
@@ -600,9 +579,10 @@ ensure_harbor_admin_auth() {
     fi
   fi
 
-  local code auth
+  local code auth tls_opt=()
+  harbor_curl_ca_opt tls_opt
   auth="$(harbor_auth_header)"
-  code="$(curl -s -o /dev/null -w '%{http_code}' \
+  code="$(curl -s "${tls_opt[@]}" -o /dev/null -w '%{http_code}' \
     -H "${auth}" \
     "$(harbor_api_url "/api/v2.0/users/current")" || echo "000")"
   log_error "Harbor API auth failed (HTTP ${code})"
