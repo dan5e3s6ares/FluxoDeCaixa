@@ -28,6 +28,7 @@ obtain_access_token_via_keycloak() {
   local oidc_client="$2"
 
   cleanup_e2e_secret
+  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" delete pod "e2e-kc-${oidc_client}" --ignore-not-found >/dev/null 2>&1
   kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" create secret generic "${E2E_SECRET_NAME}" \
     --from-literal=admin-password="${admin_password}" >/dev/null
 
@@ -161,8 +162,8 @@ main() {
     exit 1
   fi
 
-  lanc_token="$(obtain_access_token_via_keycloak "${admin_password}" "${E2E_LANCAMENTOS_CLIENT}" || true)"
-  consulta_token="$(obtain_access_token_via_keycloak "${admin_password}" "${E2E_CONSULTA_CLIENT}" || true)"
+  lanc_token="$(obtain_access_token_via_keycloak "${admin_password}" "${E2E_LANCAMENTOS_CLIENT}" | tr -d '\n\r')"
+  consulta_token="$(obtain_access_token_via_keycloak "${admin_password}" "${E2E_CONSULTA_CLIENT}" | tr -d '\n\r')"
   if [[ -z "${lanc_token}" ]] || [[ -z "${consulta_token}" ]]; then
     log_error "could not obtain OIDC tokens for ${E2E_LANCAMENTOS_CLIENT} / ${E2E_CONSULTA_CLIENT}"
     exit 1

@@ -1,0 +1,22 @@
+# k3s containerd registry config — rendered by scripts/lib/registry.sh
+# @HARBOR_REGISTRY@ = VM endpoint (IP:port); @HARBOR_ALIAS@ = harbor.local (in-VM DNS)
+mirrors:
+  "@HARBOR_REGISTRY@":
+    endpoint:
+      - "http://@HARBOR_REGISTRY@"
+  "@HARBOR_ALIAS@":
+    endpoint:
+      - "http://@HARBOR_REGISTRY@"
+  "@HARBOR_ALIAS@:@HARBOR_PORT@":
+    endpoint:
+      - "http://@HARBOR_REGISTRY@"
+configs:
+  "@HARBOR_REGISTRY@":
+    tls:
+@HARBOR_CA_FILE@
+  "@HARBOR_ALIAS@":
+    tls:
+@HARBOR_CA_FILE@
+  "@HARBOR_ALIAS@:@HARBOR_PORT@":
+    tls:
+@HARBOR_CA_FILE@

@@ -21,7 +21,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: 192.168.68.100:8080/fluxo-caixa/consolidado:main-0000000
+          image: harbor.local:8080/fluxo-caixa/consolidado:main-0000000
           command:
             - uv
             - run

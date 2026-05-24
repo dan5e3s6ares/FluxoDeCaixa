@@ -1,0 +1,12 @@
+# Podman registry trust — rendered by scripts/lib/registry.sh
+[[registry]]
+location = "@HARBOR_REGISTRY@"
+insecure = true
+
+[[registry]]
+location = "@HARBOR_ALIAS@"
+insecure = true
+
+[[registry]]
+location = "@HARBOR_ALIAS@:@HARBOR_PORT@"
+insecure = true

@@ -98,6 +98,55 @@ configure_kubeconfig() {
   exit 1
 }
 
+k3s_api_port_in_use() {
+  ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -qE '(:|\])6443$'
+}
+
+k3s_service_active() {
+  systemctl is-active --quiet k3s 2>/dev/null
+}
+
+conflicting_kubernetes_hints() {
+  local hints=()
+
+  if command -v snap >/dev/null 2>&1 && snap list k8s >/dev/null 2>&1; then
+    if snap services k8s 2>/dev/null | grep -E 'kube-apiserver|k8sd' | grep -q active; then
+      hints+=("snap k8s is using port 6443 (stop with: sudo snap stop k8s)")
+    fi
+  fi
+
+  if command -v microk8s >/dev/null 2>&1; then
+    if microk8s status --wait-ready=false 2>/dev/null | grep -q 'microk8s is running'; then
+      hints+=("microk8s is using port 6443 (stop with: sudo microk8s stop)")
+    fi
+  fi
+
+  if ((${#hints[@]} > 0)); then
+    printf '%s\n' "${hints[@]}"
+  fi
+}
+
+ensure_k3s_port_available() {
+  if ! k3s_api_port_in_use; then
+    return 0
+  fi
+  if k3s_service_active; then
+    return 0
+  fi
+
+  log_error "Port 6443 is already in use but k3s is not running."
+  local hints hint
+  hints="$(conflicting_kubernetes_hints || true)"
+  if [[ -n "${hints}" ]]; then
+    while IFS= read -r hint; do
+      [[ -n "${hint}" ]] && log_error "  ${hint}"
+    done <<< "${hints}"
+  else
+    log_error "  Stop the process bound to port 6443 before running make start."
+  fi
+  exit 1
+}
+
 # Resolve namespace and label selector for logs/restart (SVC arg).
 # Sets: SVC_NAMESPACE, SVC_SELECTOR, SVC_DEPLOYMENT
 resolve_svc_target() {

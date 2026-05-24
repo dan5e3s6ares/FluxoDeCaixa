@@ -53,7 +53,7 @@ Modelo completo: documento **02 - Requisitos e Domínios**.
 
 ## Estrutura de Repositório (monorepo — decisão fechada)
 
-**Monorepo** com `services/lancamentos`, `services/consolidado` e `services/consulta`. Pipeline **Gitea Actions** com **path filters** — build/push apenas do serviço alterado (`services/lancamentos/**`, `services/consolidado/**`, `services/consulta/**`). Imagem: `192.168.68.100:8080/fluxo-caixa/{svc}:main-{short_sha}` → GitOps ArgoCD.
+**Monorepo** com `services/lancamentos`, `services/consolidado` e `services/consulta`. Pipeline **Gitea Actions** com **path filters** — build/push apenas do serviço alterado (`services/lancamentos/**`, `services/consolidado/**`, `services/consulta/**`). Imagem: `harbor.local:8080/fluxo-caixa/{svc}:main-{short_sha}` → GitOps ArgoCD (k3s `registries.yaml` espelha `harbor.local` para o Harbor in-VM ou externo).
 
 ```
 /
@@ -92,12 +92,15 @@ Modelo completo: documento **02 - Requisitos e Domínios**.
 | VM Linux | Recursos: ≥ 8 GB RAM, 4 vCPU (dev) |
 | Podman | Build/push de imagens (rootful na VM) |
 | K3s | Cluster padrão (`CLUSTER_TYPE=k3s`) |
-| Harbor | Registry externo `192.168.68.100:8080` (pré-instalado na rede) |
+| Harbor | **In-VM** via `make start` → `harbor.local:8080` (default). Legado: `HARBOR_EXTERNAL=host:port` (sem default LAN) |
 | uv | Python 3.12+ por serviço |
 | kubectl, helm | Operar cluster |
 
 ```bash
-make start          # idempotente: bootstrap → cluster → platform → apps → wait-healthy
+make start          # idempotente: bootstrap → Harbor → Gitea → cluster → platform → seed-images → apps → wait-healthy
+# Registry externo (ex. Harbor na LAN): HARBOR_EXTERNAL=192.168.68.100:8080 make start
+./scripts/test-registry-config.sh   # valida resolução in-VM vs externo (sem root)
+./scripts/test-seed-images-config.sh   # valida detecção de tag dos manifests (sem Harbor/podman)
 make test           # pytest unitário por serviço (uv run)
 make test-e2e       # integração via KrakenD (stack up)
 make stop           # derruba cluster; preserva PVCs

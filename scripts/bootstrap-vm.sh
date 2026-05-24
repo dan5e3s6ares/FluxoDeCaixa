@@ -4,21 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
-
-HARBOR_HOST="${HARBOR_HOST:-192.168.68.100}"
-HARBOR_PORT="${HARBOR_PORT:-8080}"
-HARBOR_REGISTRY="${HARBOR_HOST}:${HARBOR_PORT}"
-HARBOR_ALIAS="${HARBOR_ALIAS:-harbor.local}"
-HARBOR_CA_CERT="${HARBOR_CA_CERT:-${SCRIPT_DIR}/../deploy/certs/harbor-ca.crt}"
+# shellcheck source=lib/registry.sh
+source "${SCRIPT_DIR}/lib/registry.sh"
 
 MIN_CPUS="${MIN_CPUS:-8}"
 MIN_RAM_MB="${MIN_RAM_MB:-16384}"
 MIN_DISK_GB="${MIN_DISK_GB:-100}"
-
-K3S_REGISTRIES="/etc/rancher/k3s/registries.yaml"
-PODMAN_REGISTRIES="/etc/containers/registries.conf.d/999-harbor.conf"
-PODMAN_CERTS_DIR="/etc/containers/certs.d/${HARBOR_REGISTRY}"
-SYSTEM_CA="/usr/local/share/ca-certificates/harbor-ca.crt"
 
 run_as_root() {
   if [[ "${EUID}" -eq 0 ]]; then
@@ -73,15 +64,6 @@ validate_resources() {
   log_info "Disk check passed: ${disk_gb} GB on /"
 }
 
-ensure_hosts_entry() {
-  if grep -qE "[[:space:]]${HARBOR_ALIAS}([[:space:]]|$)" /etc/hosts 2>/dev/null; then
-    log_info "unchanged: /etc/hosts entry for ${HARBOR_ALIAS}"
-    return 0
-  fi
-  log_info "adding /etc/hosts entry: ${HARBOR_HOST} ${HARBOR_ALIAS}"
-  printf '%s %s\n' "${HARBOR_HOST}" "${HARBOR_ALIAS}" | run_as_root tee -a /etc/hosts >/dev/null
-}
-
 install_make() {
   if command -v make >/dev/null 2>&1; then
     log_info "make already installed"
@@ -113,129 +95,21 @@ install_uv() {
 }
 
 install_k3s() {
+  ensure_k3s_port_available
+
   if command -v k3s >/dev/null 2>&1; then
     log_info "k3s already installed"
-    return 0
-  fi
-  log_info "installing k3s..."
-  curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644" sh -
-}
-
-fetch_harbor_ca() {
-  local tmp_ca
-  tmp_ca="$(mktemp)"
-
-  if [[ -f "${HARBOR_CA_CERT}" ]]; then
-    cp "${HARBOR_CA_CERT}" "${tmp_ca}"
-    echo "${tmp_ca}"
-    return 0
-  fi
-
-  if curl -fsSL "http://${HARBOR_REGISTRY}/api/v2.0/systeminfo/getcert" -o "${tmp_ca}" 2>/dev/null \
-    && [[ -s "${tmp_ca}" ]]; then
-    echo "${tmp_ca}"
-    return 0
-  fi
-
-  rm -f "${tmp_ca}"
-  return 1
-}
-
-configure_harbor_ca() {
-  local ca_file tmp_ca=""
-  local k3s_ca="/etc/rancher/k3s/harbor-ca.crt"
-  local changed=0
-
-  if ! tmp_ca="$(fetch_harbor_ca)"; then
-    log_warn "Harbor CA not available; using insecure registry config only"
-    return 0
-  fi
-
-  ca_file="${tmp_ca}"
-
-  if [[ ! -f "${SYSTEM_CA}" ]] || ! cmp -s "${ca_file}" "${SYSTEM_CA}"; then
-    run_as_root install -m 0644 "${ca_file}" "${SYSTEM_CA}"
-    run_as_root update-ca-certificates
-    log_info "updated system CA trust: ${SYSTEM_CA}"
-    changed=1
   else
-    log_info "unchanged: ${SYSTEM_CA}"
+    log_info "installing k3s..."
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644" sh -
   fi
 
-  if [[ ! -f "${k3s_ca}" ]] || ! cmp -s "${ca_file}" "${k3s_ca}"; then
-    run_as_root install -m 0644 "${ca_file}" "${k3s_ca}"
-    log_info "updated k3s CA: ${k3s_ca}"
-    changed=1
-  else
-    log_info "unchanged: ${k3s_ca}"
+  if command -v systemctl >/dev/null 2>&1 \
+    && ! run_as_root systemctl is-active --quiet k3s 2>/dev/null; then
+    ensure_k3s_port_available
+    log_info "starting k3s service..."
+    run_as_root systemctl enable --now k3s
   fi
-
-  run_as_root mkdir -p "${PODMAN_CERTS_DIR}"
-  if [[ ! -f "${PODMAN_CERTS_DIR}/ca.crt" ]] || ! cmp -s "${ca_file}" "${PODMAN_CERTS_DIR}/ca.crt"; then
-    run_as_root install -m 0644 "${ca_file}" "${PODMAN_CERTS_DIR}/ca.crt"
-    log_info "updated podman CA: ${PODMAN_CERTS_DIR}/ca.crt"
-    changed=1
-  else
-    log_info "unchanged: ${PODMAN_CERTS_DIR}/ca.crt"
-  fi
-
-  rm -f "${tmp_ca}"
-
-  if (( changed )) && command -v systemctl >/dev/null 2>&1 \
-    && run_as_root systemctl is-active --quiet k3s 2>/dev/null; then
-    log_info "restarting k3s to apply CA changes..."
-    run_as_root systemctl restart k3s
-  fi
-}
-
-configure_k3s_registries() {
-  local changed=0
-  local k3s_ca="/etc/rancher/k3s/harbor-ca.crt"
-  local ca_block=""
-
-  if [[ -f "${k3s_ca}" ]]; then
-    ca_block="      ca_file: ${k3s_ca}"
-  else
-    ca_block="      insecure_skip_verify: true"
-  fi
-
-  if write_if_changed "${K3S_REGISTRIES}" <<EOF
-mirrors:
-  "${HARBOR_REGISTRY}":
-    endpoint:
-      - "http://${HARBOR_REGISTRY}"
-  "${HARBOR_ALIAS}":
-    endpoint:
-      - "http://${HARBOR_REGISTRY}"
-configs:
-  "${HARBOR_REGISTRY}":
-    tls:
-${ca_block}
-  "${HARBOR_ALIAS}":
-    tls:
-${ca_block}
-EOF
-  then
-    changed=1
-  fi
-
-  if (( changed )) && command -v systemctl >/dev/null 2>&1 \
-    && run_as_root systemctl is-active --quiet k3s 2>/dev/null; then
-    log_info "restarting k3s to apply registry config..."
-    run_as_root systemctl restart k3s
-  fi
-}
-
-configure_podman_registries() {
-  write_if_changed "${PODMAN_REGISTRIES}" <<EOF
-[[registry]]
-location = "${HARBOR_REGISTRY}"
-insecure = true
-
-[[registry]]
-location = "${HARBOR_ALIAS}"
-insecure = true
-EOF
 }
 
 verify_commands() {
@@ -250,17 +124,31 @@ verify_commands() {
 main() {
   log_info "bootstrap-vm.sh — validating VM resources and tooling"
   validate_resources
-  ensure_hosts_entry
+
+  resolve_harbor_config
+  log_info "Harbor config: mode=${HARBOR_MODE} registry=${HARBOR_REGISTRY} image_ref=${HARBOR_IMAGE_REGISTRY}"
+
+  ensure_harbor_hosts_entry
   configure_k3s_registries
+  configure_podman_registries
+  write_registry_env_file
+
   install_make
   install_podman
   install_uv
   install_k3s
-  configure_harbor_ca
-  configure_k3s_registries
-  configure_podman_registries
+
+  if [[ -f "${HARBOR_CA_CERT}" ]]; then
+    install_system_harbor_ca "${HARBOR_CA_CERT}"
+    configure_k3s_registries
+  elif [[ "${HARBOR_MODE}" == "external" ]]; then
+    configure_harbor_trust
+  else
+    log_info "in-VM Harbor CA not yet published — deploy-registry.sh will finalize trust"
+  fi
+
   verify_commands
-  log_info "bootstrap-vm.sh — complete"
+  log_info "bootstrap-vm.sh — complete (registry env: ${REGISTRY_ENV_FILE})"
 }
 
 main "$@"

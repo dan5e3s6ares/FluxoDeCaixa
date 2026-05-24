@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: lancamentos
-          image: 192.168.68.100:8080/fluxo-caixa/svc-lancamentos:main-0000000
+          image: harbor.local:8080/fluxo-caixa/svc-lancamentos:main-0000000
           ports:
             - name: http
               containerPort: 8000

@@ -9,8 +9,11 @@ export CLUSTER_TYPE ENV KRAKEND_NODEPORT
 start:
 	@echo ">> Provisionando cluster e dependências (CLUSTER_TYPE=$(CLUSTER_TYPE), ENV=$(ENV))..."
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/bootstrap-vm.sh
+	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/deploy-registry.sh
+	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/deploy-gitea.sh
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/cluster-up.sh
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/deploy-platform.sh
+	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/seed-images.sh
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/deploy-apps.sh
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/wait-healthy.sh
 	@echo ">> Stack pronta. Gateway: https://localhost:8080 (NodePort $(KRAKEND_NODEPORT))"

@@ -160,8 +160,27 @@ wait_for_root_app_sync() {
   kubectl_cmd -n "${ARGOCD_NAMESPACE}" get application fluxo-caixa -o wide || true
 }
 
+load_deploy_env() {
+  local gitea_env="/etc/fluxo-caixa/gitea.env"
+  if [[ -f "${REGISTRY_ENV_FILE:-/etc/fluxo-caixa/registry.env}" ]]; then
+    # shellcheck disable=SC1090
+    set -a
+    source "${REGISTRY_ENV_FILE:-/etc/fluxo-caixa/registry.env}"
+    set +a
+    log_info "loaded registry env (HARBOR_IMAGE_REGISTRY=${HARBOR_IMAGE_REGISTRY:-<unset>})"
+  fi
+  if [[ -f "${gitea_env}" ]]; then
+    # shellcheck disable=SC1090
+    set -a
+    source "${gitea_env}"
+    set +a
+    log_info "loaded gitea env (GIT_REPO_URL=${GIT_REPO_URL:-<unset>})"
+  fi
+}
+
 main() {
   log_info "deploy-apps.sh — CLUSTER_TYPE=${CLUSTER_TYPE} ENV=${ENV}"
+  load_deploy_env
   configure_kubeconfig
   deploy_sealed_secrets_controller
   deploy_argocd

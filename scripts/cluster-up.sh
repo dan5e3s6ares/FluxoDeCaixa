@@ -84,6 +84,7 @@ ensure_k3s_running() {
 
   if command -v systemctl >/dev/null 2>&1; then
     if ! run_as_root systemctl is-active --quiet k3s 2>/dev/null; then
+      ensure_k3s_port_available
       log_info "starting k3s service..."
       run_as_root systemctl enable --now k3s
     fi

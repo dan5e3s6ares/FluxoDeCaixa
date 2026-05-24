@@ -1,0 +1,18 @@
+# Harbor in-VM config — rendered by scripts/deploy-registry.sh
+hostname: @HARBOR_ALIAS@
+external_url: http://@HARBOR_ALIAS@:@HARBOR_PORT@
+
+http:
+  port: @HARBOR_PORT@
+
+https:
+  port: 443
+  certificate: @HARBOR_CERT@
+  private_key: @HARBOR_KEY@
+
+harbor_admin_password: @HARBOR_ADMIN_PASSWORD@
+
+data_volume: @HARBOR_DATA_VOLUME@
+
+# Dev VM: trivy/notary disabled via install.sh --with-trivy false --with-notary false
+# (see scripts/deploy-registry.sh) to reduce RAM on the dev VM.

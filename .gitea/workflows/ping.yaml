@@ -1,0 +1,12 @@
+# Smoke workflow — triggered by scripts/deploy-gitea.sh acceptance check.
+name: Ping
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: self-hosted
+    steps:
+      - name: Runner online
+        run: echo "gitea-actions runner OK"
