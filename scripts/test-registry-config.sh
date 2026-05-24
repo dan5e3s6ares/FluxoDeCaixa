@@ -86,7 +86,28 @@ test_harbor_api_bases_in_vm_mode() {
   HARBOR_MODE="in-vm"
   local first
   first="$(harbor_api_bases | head -1)"
-  assert_eq "in-vm api base order" "http://harbor.local:8080" "${first}"
+  assert_eq "in-vm api base order" "http://10.213.172.43:8080" "${first}"
+}
+
+test_in_vm_hosts_prefers_vm_ip() {
+  export SELF_CONTAINED=1 HARBOR_MODE="in-vm" HARBOR_PORT="8080" HARBOR_ALIAS="harbor.local"
+  HARBOR_HOST="192.168.68.100"
+  HARBOR_REGISTRY="192.168.68.100:8080"
+  local vm_ip
+  vm_ip="$(detect_vm_primary_ip)"
+  ensure_harbor_hosts_entry
+  assert_eq "in-vm registry host" "${vm_ip}" "${HARBOR_HOST}"
+  assert_eq "in-vm registry endpoint" "${vm_ip}:8080" "${HARBOR_REGISTRY}"
+}
+
+test_in_vm_hosts_corrects_stale_external_mapping() {
+  detect_vm_primary_ip() { echo "10.213.172.43"; }
+  export SELF_CONTAINED=1 HARBOR_MODE="in-vm" HARBOR_PORT="8080" HARBOR_ALIAS="harbor.local"
+  HARBOR_HOST="192.168.68.100"
+  HARBOR_REGISTRY="192.168.68.100:8080"
+  ensure_harbor_hosts_entry
+  assert_eq "in-vm stale hosts correction" "10.213.172.43" "${HARBOR_HOST}"
+  assert_eq "in-vm stale hosts registry" "10.213.172.43:8080" "${HARBOR_REGISTRY}"
 }
 
 test_harbor_api_bases_external_mode() {
@@ -100,6 +121,7 @@ test_harbor_api_bases_external_mode() {
 main() {
   # shellcheck source=lib/registry.sh
   source "${SCRIPT_DIR}/lib/registry.sh"
+  set_harbor_hosts_entry() { :; }
   log_info "test-registry-config.sh — registry mode resolution"
   test_self_contained_defaults
   test_external_harbor_external_var
@@ -108,6 +130,8 @@ main() {
   test_render_registries_template
   test_render_podman_registries_template
   test_harbor_api_bases_in_vm_mode
+  test_in_vm_hosts_prefers_vm_ip
+  test_in_vm_hosts_corrects_stale_external_mapping
   test_harbor_api_bases_external_mode
   if (( failures > 0 )); then
     log_error "${failures} assertion(s) failed"

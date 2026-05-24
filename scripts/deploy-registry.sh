@@ -18,6 +18,7 @@ fi
 resolve_harbor_config
 HARBOR_ADMIN_USER="${HARBOR_ADMIN_USER:-admin}"
 HARBOR_ADMIN_PASSWORD="${HARBOR_ADMIN_PASSWORD:-Harbor12345}"
+load_harbor_admin_credentials
 HARBOR_PROJECT="${HARBOR_PROJECT:-fluxo-caixa}"
 HARBOR_VERSION="${HARBOR_VERSION:-2.10.2}"
 HARBOR_INSTALL_DIR="${HARBOR_INSTALL_DIR:-/opt/harbor}"
@@ -59,10 +60,6 @@ write_if_changed() {
   rm -f "${tmp}"
   log_info "updated: ${dest}"
   return 0
-}
-
-harbor_auth_header() {
-  printf 'Authorization: Basic %s' "$(printf '%s:%s' "${HARBOR_ADMIN_USER}" "${HARBOR_ADMIN_PASSWORD}" | base64 -w0 2>/dev/null || printf '%s:%s' "${HARBOR_ADMIN_USER}" "${HARBOR_ADMIN_PASSWORD}" | base64)"
 }
 
 generate_harbor_certs() {
@@ -275,15 +272,27 @@ ensure_harbor_project() {
 }
 
 verify_harbor_ui() {
+  load_harbor_admin_credentials
+  if harbor_admin_auth_ok; then
+    log_info "Harbor UI/API auth OK (admin user)"
+    return 0
+  fi
+
+  if [[ "${HARBOR_MODE}" == "in-vm" ]] && [[ -f "${HARBOR_INSTALL_DIR}/harbor.yml" ]]; then
+    log_info "Harbor auth failed; reconfiguring with credentials from ${HARBOR_INSTALL_DIR}/harbor.yml..."
+    run_harbor_install
+    retry 12 5 harbor_admin_auth_ok
+    if harbor_admin_auth_ok; then
+      log_info "Harbor UI/API auth OK after reconfigure"
+      return 0
+    fi
+  fi
+
   local code auth
   auth="$(harbor_auth_header)"
   code="$(curl -s -o /dev/null -w '%{http_code}' \
     -H "${auth}" \
     "$(harbor_api_url "/api/v2.0/users/current")" || echo "000")"
-  if [[ "${code}" == "200" ]]; then
-    log_info "Harbor UI/API auth OK (admin user)"
-    return 0
-  fi
   log_error "Harbor API auth failed (HTTP ${code})"
   return 1
 }
@@ -327,6 +336,7 @@ main() {
   require_cmd python3
 
   ensure_harbor_hosts_entry
+  load_harbor_admin_credentials
   install_harbor
   wait_for_harbor
   ensure_harbor_project

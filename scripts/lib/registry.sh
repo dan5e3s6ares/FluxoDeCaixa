@@ -11,6 +11,9 @@ PODMAN_REGISTRIES="${PODMAN_REGISTRIES:-/etc/containers/registries.conf.d/999-ha
 HARBOR_PROJECT="${HARBOR_PROJECT:-fluxo-caixa}"
 HARBOR_ALIAS="${HARBOR_ALIAS:-harbor.local}"
 HARBOR_PORT="${HARBOR_PORT:-8080}"
+HARBOR_INSTALL_DIR="${HARBOR_INSTALL_DIR:-/opt/harbor}"
+HARBOR_ADMIN_USER="${HARBOR_ADMIN_USER:-admin}"
+HARBOR_ADMIN_PASSWORD="${HARBOR_ADMIN_PASSWORD:-Harbor12345}"
 
 SCRIPT_DIR_REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT_REGISTRY="$(cd "${SCRIPT_DIR_REGISTRY}/../.." && pwd)"
@@ -157,11 +160,39 @@ source_registry_env() {
   return 1
 }
 
+harbor_auth_header() {
+  printf 'Authorization: Basic %s' \
+    "$(printf '%s:%s' "${HARBOR_ADMIN_USER}" "${HARBOR_ADMIN_PASSWORD}" | base64 -w0 2>/dev/null \
+      || printf '%s:%s' "${HARBOR_ADMIN_USER}" "${HARBOR_ADMIN_PASSWORD}" | base64)"
+}
+
+load_harbor_admin_credentials() {
+  local yml="${HARBOR_INSTALL_DIR}/harbor.yml"
+  local pw
+
+  [[ -f "${yml}" ]] || return 0
+  pw="$(grep -E '^harbor_admin_password:' "${yml}" 2>/dev/null \
+    | sed -E 's/^harbor_admin_password:[[:space:]]*//' || true)"
+  if [[ -n "${pw}" && "${pw}" != "${HARBOR_ADMIN_PASSWORD}" ]]; then
+    HARBOR_ADMIN_PASSWORD="${pw}"
+    log_info "loaded Harbor admin password from ${yml}"
+  fi
+}
+
+harbor_admin_auth_ok() {
+  local code auth
+  auth="$(harbor_auth_header)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H "${auth}" \
+    "$(harbor_api_url "/api/v2.0/users/current")" 2>/dev/null || echo "000")"
+  [[ "${code}" == "200" ]]
+}
+
 harbor_api_bases() {
   if [[ "${HARBOR_MODE}" == "in-vm" ]]; then
     printf '%s\n' \
-      "http://${HARBOR_ALIAS}:${HARBOR_PORT}" \
-      "http://${HARBOR_REGISTRY}"
+      "http://${HARBOR_REGISTRY}" \
+      "http://${HARBOR_ALIAS}:${HARBOR_PORT}"
   else
     printf '%s\n' \
       "http://${HARBOR_REGISTRY}" \
@@ -170,9 +201,17 @@ harbor_api_bases() {
 }
 
 harbor_api_ready() {
-  local base
+  local base vm_ip hosts_ip
+  vm_ip="$(detect_vm_primary_ip)"
   while IFS= read -r base; do
     [[ -n "${base}" ]] || continue
+    if [[ "${HARBOR_MODE}" == "in-vm" ]]; then
+      hosts_ip="$(getent ahostsv4 "${HARBOR_ALIAS}" 2>/dev/null | awk '{print $1}' | head -1 || true)"
+      if [[ "${base}" == "http://${HARBOR_ALIAS}:${HARBOR_PORT}" ]] \
+        && [[ -n "${hosts_ip}" && "${hosts_ip}" != "${vm_ip}" ]]; then
+        continue
+      fi
+    fi
     if curl -fsS "${base}/api/v2.0/systeminfo" >/dev/null 2>&1; then
       HARBOR_API_BASE="${base}"
       return 0
@@ -191,13 +230,20 @@ resolve_harbor_api_base() {
 
 sync_harbor_registry_endpoint() {
   local base="${HARBOR_API_BASE:-}"
-  local host ip
+  local host ip vm_ip
 
   [[ -n "${base}" ]] || return 0
   host="${base#http://}"
   host="${host%%/*}"
   if [[ "${host}" == *:* ]]; then
     host="${host%%:*}"
+  fi
+
+  if [[ "${HARBOR_MODE}" == "in-vm" ]]; then
+    vm_ip="$(detect_vm_primary_ip)"
+    HARBOR_HOST="${vm_ip}"
+    HARBOR_REGISTRY="${HARBOR_ALIAS}:${HARBOR_PORT}"
+    return 0
   fi
 
   if [[ "${host}" == "${HARBOR_ALIAS}" ]]; then
@@ -234,10 +280,41 @@ harbor_api_url() {
   printf '%s%s' "${HARBOR_API_BASE}" "${path}"
 }
 
-ensure_harbor_hosts_entry() {
-  local current_ip
-  current_ip="$(getent ahostsv4 "${HARBOR_ALIAS}" 2>/dev/null | awk '{print $1}' | head -1 || true)"
+set_harbor_hosts_entry() {
+  local ip="$1"
+  local tmp
 
+  tmp="$(mktemp)"
+  if [[ -f /etc/hosts ]]; then
+    grep -vE "[[:space:]]${HARBOR_ALIAS}([[:space:]]|$)" /etc/hosts >"${tmp}" || true
+  fi
+  printf '%s %s\n' "${ip}" "${HARBOR_ALIAS}" >>"${tmp}"
+  run_as_root install -m 0644 "${tmp}" /etc/hosts
+  rm -f "${tmp}"
+}
+
+ensure_harbor_hosts_entry() {
+  local current_ip vm_ip
+
+  if [[ "${HARBOR_MODE}" == "in-vm" ]]; then
+    vm_ip="$(detect_vm_primary_ip)"
+    HARBOR_HOST="${vm_ip}"
+    HARBOR_REGISTRY="${HARBOR_HOST}:${HARBOR_PORT}"
+    current_ip="$(getent ahostsv4 "${HARBOR_ALIAS}" 2>/dev/null | awk '{print $1}' | head -1 || true)"
+    if [[ "${current_ip}" != "${HARBOR_HOST}" ]]; then
+      if [[ -n "${current_ip}" ]]; then
+        log_info "correcting /etc/hosts for in-VM Harbor: ${HARBOR_ALIAS} -> ${HARBOR_HOST} (was ${current_ip})"
+      else
+        log_info "adding /etc/hosts entry for in-VM Harbor: ${HARBOR_HOST} ${HARBOR_ALIAS}"
+      fi
+      set_harbor_hosts_entry "${HARBOR_HOST}"
+    else
+      log_info "unchanged: /etc/hosts entry for ${HARBOR_ALIAS} (${current_ip})"
+    fi
+    return 0
+  fi
+
+  current_ip="$(getent ahostsv4 "${HARBOR_ALIAS}" 2>/dev/null | awk '{print $1}' | head -1 || true)"
   if [[ -n "${current_ip}" ]]; then
     if [[ "${HARBOR_HOST}" != "${current_ip}" ]]; then
       log_info "using existing /etc/hosts mapping: ${HARBOR_ALIAS} -> ${current_ip} (detected ${HARBOR_HOST})"
@@ -250,7 +327,7 @@ ensure_harbor_hosts_entry() {
   fi
 
   log_info "adding /etc/hosts entry: ${HARBOR_HOST} ${HARBOR_ALIAS}"
-  printf '%s %s\n' "${HARBOR_HOST}" "${HARBOR_ALIAS}" | run_as_root tee -a /etc/hosts >/dev/null
+  set_harbor_hosts_entry "${HARBOR_HOST}"
 }
 
 configure_podman_cert_dir() {
