@@ -261,21 +261,68 @@ patch_harbor_compose_for_podman() {
   fi
 }
 
+resolve_harbor_compose() {
+  # podman-docker on Ubuntu exposes compose as a docker CLI plugin, not a PATH binary.
+  local candidate
+  if candidate="$(command -v docker-compose 2>/dev/null)"; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+  for candidate in \
+    /usr/libexec/docker/cli-plugins/docker-compose \
+    /usr/bin/docker-compose \
+    /usr/local/bin/docker-compose; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    printf '%s\n' "docker compose"
+    return 0
+  fi
+  return 1
+}
+
 install_harbor_compose_wrapper() {
   # Harbor install.sh re-runs ./prepare and regenerates docker-compose.yml with syslog
   # logging before compose up. Patch immediately before up via a docker-compose shim.
   local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
-  local real_compose shim_path patch_script
-  real_compose="$(command -v docker-compose 2>/dev/null || true)"
+  local real_compose shim_path patch_script use_docker_compose_plugin=0
+  real_compose="$(resolve_harbor_compose 2>/dev/null || true)"
   if [[ -z "${real_compose}" ]]; then
     log_warn "docker-compose not found; Harbor compose patch wrapper skipped"
     return 0
+  fi
+  if [[ "${real_compose}" == "docker compose" ]]; then
+    use_docker_compose_plugin=1
   fi
   patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
   shim_path="${shim_dir}/docker-compose"
 
   run_as_root mkdir -p "${shim_dir}"
-  run_as_root tee "${shim_path}" >/dev/null <<EOF
+  if (( use_docker_compose_plugin )); then
+    run_as_root tee "${shim_path}" >/dev/null <<EOF
+#!/usr/bin/env bash
+# fluxo-caixa: strip Harbor syslog logging blocks before compose up (podman unsupported driver).
+set -euo pipefail
+HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
+PATCH_SCRIPT='${patch_script}'
+
+patch_compose_if_needed() {
+  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
+  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
+}
+
+case "\${1:-}" in
+  up|create|run|start)
+    patch_compose_if_needed
+    ;;
+esac
+exec docker compose "\$@"
+EOF
+  else
+    run_as_root tee "${shim_path}" >/dev/null <<EOF
 #!/usr/bin/env bash
 # fluxo-caixa: strip Harbor syslog logging blocks before compose up (podman unsupported driver).
 set -euo pipefail
@@ -295,8 +342,9 @@ case "\${1:-}" in
 esac
 exec "\${REAL_COMPOSE}" "\$@"
 EOF
+  fi
   run_as_root chmod 0755 "${shim_path}"
-  log_info "installed Harbor docker-compose wrapper: ${shim_path}"
+  log_info "installed Harbor docker-compose wrapper: ${shim_path} (backend=${real_compose})"
 }
 
 install_harbor_docker_version_shim() {
