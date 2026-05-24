@@ -128,6 +128,7 @@ ensure_container_runtime() {
       run_as_root systemctl enable --now podman.socket 2>/dev/null || true
     fi
     if docker info >/dev/null 2>&1; then
+      ensure_podman_nodocker
       log_info "podman-docker runtime ready"
       return 0
     fi
@@ -230,6 +231,11 @@ gitea_api() {
   curl "${args[@]}"
 }
 
+gitea_docker_exec() {
+  # Gitea refuses CLI commands run as root inside the container.
+  run_as_root docker exec -u git -w /etc/gitea gitea "$@"
+}
+
 ensure_admin_user() {
   if curl -fsS -H "$(auth_basic_header)" "${GITEA_API_URL}/user" >/dev/null 2>&1; then
     log_info "Gitea admin user already configured"
@@ -237,13 +243,13 @@ ensure_admin_user() {
   fi
 
   log_info "creating Gitea admin user (${GITEA_ADMIN_USER})..."
-  run_as_root docker exec gitea gitea admin user create \
+  gitea_docker_exec gitea admin user create \
     --admin \
     --username "${GITEA_ADMIN_USER}" \
     --password "${GITEA_ADMIN_PASSWORD}" \
     --email "${GITEA_ADMIN_EMAIL}" \
     --must-change-password=false 2>/dev/null \
-    || run_as_root docker exec gitea gitea admin user change-password \
+    || gitea_docker_exec gitea admin user change-password \
       --username "${GITEA_ADMIN_USER}" \
       --password "${GITEA_ADMIN_PASSWORD}" 2>/dev/null \
     || log_warn "admin user may already exist; continuing"
