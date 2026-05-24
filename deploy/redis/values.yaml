@@ -1,4 +1,13 @@
 # Redis standalone — doc 07 (namespace cache, volátil, maxmemory 256MB allkeys-lru)
+# Bitnami moved most docker.io/bitnami tags to bitnamilegacy (Aug 2025); without this,
+# helm --wait hangs on ImagePullBackOff during make start.
+global:
+  security:
+    allowInsecureImages: true
+
+image:
+  repository: bitnamilegacy/redis
+
 architecture: standalone
 
 auth:
