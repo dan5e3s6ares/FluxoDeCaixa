@@ -193,6 +193,259 @@ ensure_container_runtime() {
   exit 1
 }
 
+harbor_compose_search_path() {
+  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
+  if [[ "${PATH}" == "${shim_dir}:"* ]]; then
+    printf '%s\n' "${PATH#${shim_dir}:}"
+    return 0
+  fi
+  printf '%s\n' "${PATH}"
+}
+
+ensure_harbor_prepare_dirs() {
+  # Podman (via podman-docker) requires bind-mount sources to exist; Docker auto-creates them.
+  run_as_root mkdir -p "${HARBOR_INSTALL_DIR}/common/config" "${HARBOR_DATA_VOLUME}/secret"
+}
+
+harbor_needs_docker_version_shim() {
+  command -v podman >/dev/null 2>&1 || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  local version_line major
+  version_line="$(docker --version 2>/dev/null || true)"
+  if [[ "${version_line}" =~ ([0-9]+)\.([0-9]+) ]]; then
+    major="${BASH_REMATCH[1]}"
+    if [[ "${major}" -lt 17 ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+harbor_uses_podman_runtime() {
+  command -v podman >/dev/null 2>&1 || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  if docker info 2>/dev/null | grep -qi podman; then
+    return 0
+  fi
+  local version_line
+  version_line="$(docker --version 2>/dev/null || true)"
+  [[ "${version_line}" == *[Pp]odman* ]]
+}
+
+resolve_harbor_compose() {
+  local candidate search_path
+  search_path="$(harbor_compose_search_path)"
+  if candidate="$(PATH="${search_path}" command -v docker-compose 2>/dev/null)"; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+  for candidate in \
+    /usr/libexec/docker/cli-plugins/docker-compose \
+    /usr/bin/docker-compose \
+    /usr/local/bin/docker-compose; do
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  if PATH="${search_path}" docker-compose version >/dev/null 2>&1; then
+    if candidate="$(PATH="${search_path}" command -v docker-compose 2>/dev/null)"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+    printf '%s\n' "docker-compose"
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    printf '%s\n' "docker compose"
+    return 0
+  fi
+  return 1
+}
+
+resolve_harbor_compose_absolute() {
+  local raw="$1"
+  local candidate search_path
+  search_path="$(harbor_compose_search_path)"
+  case "${raw}" in
+    "docker compose")
+      printf '%s\n' "${raw}"
+      return 0
+      ;;
+    /*)
+      printf '%s\n' "${raw}"
+      return 0
+      ;;
+    "docker-compose")
+      if candidate="$(PATH="${search_path}" command -v docker-compose 2>/dev/null)"; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+      for candidate in \
+        /usr/libexec/docker/cli-plugins/docker-compose \
+        /usr/bin/docker-compose \
+        /usr/local/bin/docker-compose; do
+        if [[ -f "${candidate}" ]]; then
+          printf '%s\n' "${candidate}"
+          return 0
+        fi
+      done
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_harbor_compose_wrapper() {
+  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
+  local real_compose shim_path patch_script compose_backend=path
+  real_compose="$(resolve_harbor_compose 2>/dev/null || true)"
+  if [[ -z "${real_compose}" ]] && harbor_uses_podman_runtime; then
+    for candidate in \
+      /usr/libexec/docker/cli-plugins/docker-compose \
+      /usr/bin/docker-compose; do
+      if [[ -f "${candidate}" ]]; then
+        real_compose="${candidate}"
+        break
+      fi
+    done
+    if [[ -z "${real_compose}" ]] \
+      && PATH="$(harbor_compose_search_path)" docker-compose version >/dev/null 2>&1; then
+      real_compose="docker-compose"
+    elif [[ -z "${real_compose}" ]] && command -v docker >/dev/null 2>&1; then
+      real_compose="docker compose"
+    fi
+  fi
+  if [[ -z "${real_compose}" ]]; then
+    log_warn "docker-compose not found; Harbor compose patch wrapper skipped"
+    return 0
+  fi
+  if [[ "${real_compose}" == "docker compose" ]]; then
+    compose_backend=plugin
+  else
+    if ! real_compose="$(resolve_harbor_compose_absolute "${real_compose}")"; then
+      log_warn "docker-compose backend not resolved to absolute path; Harbor compose patch wrapper skipped"
+      return 0
+    fi
+    compose_backend=path
+  fi
+  patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
+  shim_path="${shim_dir}/docker-compose"
+
+  run_as_root mkdir -p "${shim_dir}"
+  if [[ "${compose_backend}" == "plugin" ]]; then
+    run_as_root tee "${shim_path}" >/dev/null <<EOF
+#!/usr/bin/env bash
+# fluxo-caixa: strip Harbor syslog logging blocks before compose up (podman unsupported driver).
+set -euo pipefail
+HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
+PATCH_SCRIPT='${patch_script}'
+
+patch_compose_if_needed() {
+  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
+  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
+}
+
+case "\${1:-}" in
+  up|create|run|start|down)
+    patch_compose_if_needed
+    ;;
+esac
+exec docker compose "\$@"
+EOF
+  else
+    run_as_root tee "${shim_path}" >/dev/null <<EOF
+#!/usr/bin/env bash
+# fluxo-caixa: strip Harbor syslog logging blocks before compose up (podman unsupported driver).
+set -euo pipefail
+HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
+PATCH_SCRIPT='${patch_script}'
+REAL_COMPOSE='${real_compose}'
+
+patch_compose_if_needed() {
+  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
+  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
+}
+
+case "\${1:-}" in
+  up|create|run|start|down)
+    patch_compose_if_needed
+    ;;
+esac
+exec "\${REAL_COMPOSE}" "\$@"
+EOF
+  fi
+  run_as_root chmod 0755 "${shim_path}"
+  log_info "installed Harbor docker-compose wrapper: ${shim_path} (backend=${real_compose})"
+}
+
+install_harbor_docker_shim() {
+  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
+  local real_docker shim_path patch_script spoof_version=0 patch_compose=0
+  real_docker="$(command -v docker)"
+  shim_path="${shim_dir}/docker"
+  patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
+  if harbor_needs_docker_version_shim; then
+    spoof_version=1
+  fi
+  if harbor_uses_podman_runtime; then
+    patch_compose=1
+  fi
+
+  run_as_root mkdir -p "${shim_dir}"
+  run_as_root tee "${shim_path}" >/dev/null <<EOF
+#!/usr/bin/env bash
+# fluxo-caixa: Harbor podman-docker shims (version check + compose syslog patch).
+set -euo pipefail
+REAL_DOCKER='${real_docker}'
+HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
+PATCH_SCRIPT='${patch_script}'
+SPOOF_VERSION='${spoof_version}'
+PATCH_COMPOSE='${patch_compose}'
+
+patch_compose_if_needed() {
+  [[ "\${PATCH_COMPOSE}" == "1" ]] || return 0
+  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
+  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
+}
+
+case "\${1:-}" in
+  --version)
+    if [[ "\${SPOOF_VERSION}" == "1" ]]; then
+      echo "Docker version 24.0.7, build \$(podman --version 2>/dev/null | awk '{print \$3}' || echo unknown)"
+      exit 0
+    fi
+    ;;
+  version)
+    if [[ "\${SPOOF_VERSION}" == "1" ]] \
+      && { [[ -z "\${2:-}" ]] || [[ "\${2:-}" == --format* ]]; }; then
+      echo "Client: Docker Engine - Community"
+      echo " Version:           24.0.7"
+      echo " API version:       1.43"
+      echo " Go version:        go1.20.10"
+      echo " Git commit:        fluxo-caixa-podman-shim"
+      echo " Built:             $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo " OS/Arch:           linux/amd64"
+      echo " Context:           default"
+      exit 0
+    fi
+    ;;
+  compose)
+    case "\${2:-}" in
+      up|create|run|start)
+        patch_compose_if_needed
+        ;;
+    esac
+    ;;
+esac
+exec "\${REAL_DOCKER}" "\$@"
+EOF
+  run_as_root chmod 0755 "${shim_path}"
+  log_info "installed Harbor docker shim: ${shim_path} (spoof_version=${spoof_version}, patch_compose=${patch_compose})"
+}
+
 download_harbor_installer() {
   local tarball="harbor-online-installer-v${HARBOR_VERSION}.tgz"
   local url="https://github.com/goharbor/harbor/releases/download/v${HARBOR_VERSION}/${tarball}"
@@ -218,7 +471,18 @@ download_harbor_installer() {
 }
 
 run_harbor_install() {
-  run_as_root bash -c "cd '${HARBOR_INSTALL_DIR}' && ./prepare && ./install.sh ${HARBOR_INSTALL_FLAGS}"
+  ensure_harbor_prepare_dirs
+  local harbor_path="${PATH}"
+  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
+  if harbor_needs_docker_version_shim || harbor_uses_podman_runtime; then
+    install_harbor_docker_shim
+    harbor_path="${shim_dir}:${harbor_path}"
+  fi
+  if harbor_uses_podman_runtime; then
+    install_harbor_compose_wrapper
+    harbor_path="${shim_dir}:${harbor_path}"
+  fi
+  run_as_root env PATH="${harbor_path}" bash -c "cd '${HARBOR_INSTALL_DIR}' && ./install.sh ${HARBOR_INSTALL_FLAGS}"
 }
 
 install_harbor() {
