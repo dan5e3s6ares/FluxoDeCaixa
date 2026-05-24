@@ -23,6 +23,7 @@ HARBOR_MODE=""
 HARBOR_HOST=""
 HARBOR_REGISTRY=""
 HARBOR_IMAGE_REGISTRY=""
+HARBOR_API_BASE=""
 
 detect_vm_primary_ip() {
   local ip
@@ -156,11 +157,98 @@ source_registry_env() {
   return 1
 }
 
-ensure_harbor_hosts_entry() {
-  if grep -qE "[[:space:]]${HARBOR_ALIAS}([[:space:]]|$)" /etc/hosts 2>/dev/null; then
-    log_info "unchanged: /etc/hosts entry for ${HARBOR_ALIAS}"
+harbor_api_bases() {
+  if [[ "${HARBOR_MODE}" == "in-vm" ]]; then
+    printf '%s\n' \
+      "http://${HARBOR_ALIAS}:${HARBOR_PORT}" \
+      "http://${HARBOR_REGISTRY}"
+  else
+    printf '%s\n' \
+      "http://${HARBOR_REGISTRY}" \
+      "http://${HARBOR_ALIAS}:${HARBOR_PORT}"
+  fi
+}
+
+harbor_api_ready() {
+  local base
+  while IFS= read -r base; do
+    [[ -n "${base}" ]] || continue
+    if curl -fsS "${base}/api/v2.0/systeminfo" >/dev/null 2>&1; then
+      HARBOR_API_BASE="${base}"
+      return 0
+    fi
+  done < <(harbor_api_bases)
+  return 1
+}
+
+resolve_harbor_api_base() {
+  if harbor_api_ready; then
+    sync_harbor_registry_endpoint
     return 0
   fi
+  return 1
+}
+
+sync_harbor_registry_endpoint() {
+  local base="${HARBOR_API_BASE:-}"
+  local host ip
+
+  [[ -n "${base}" ]] || return 0
+  host="${base#http://}"
+  host="${host%%/*}"
+  if [[ "${host}" == *:* ]]; then
+    host="${host%%:*}"
+  fi
+
+  if [[ "${host}" == "${HARBOR_ALIAS}" ]]; then
+    ip="$(getent ahostsv4 "${HARBOR_ALIAS}" 2>/dev/null | awk '{print $1}' | head -1 || true)"
+    if [[ -n "${ip}" ]] \
+      && curl -fsS "http://${ip}:${HARBOR_PORT}/api/v2.0/systeminfo" >/dev/null 2>&1; then
+      if [[ "${HARBOR_HOST}" != "${ip}" ]]; then
+        log_info "syncing Harbor registry endpoint to reachable IP ${ip} (was ${HARBOR_HOST})"
+        HARBOR_HOST="${ip}"
+        HARBOR_REGISTRY="${HARBOR_HOST}:${HARBOR_PORT}"
+      fi
+      return 0
+    fi
+    if [[ "${HARBOR_REGISTRY}" != "${HARBOR_ALIAS}:${HARBOR_PORT}" ]]; then
+      log_info "Harbor API reachable via ${HARBOR_ALIAS}; using alias for registry endpoint"
+      HARBOR_REGISTRY="${HARBOR_ALIAS}:${HARBOR_PORT}"
+    fi
+    return 0
+  fi
+
+  if [[ "${host}" != "${HARBOR_HOST}" ]]; then
+    log_info "syncing Harbor registry endpoint to ${host}:${HARBOR_PORT} (was ${HARBOR_HOST}:${HARBOR_PORT})"
+    HARBOR_HOST="${host}"
+    HARBOR_REGISTRY="${HARBOR_HOST}:${HARBOR_PORT}"
+  fi
+}
+
+harbor_api_url() {
+  local path="$1"
+  local base="${HARBOR_API_BASE:-}"
+  if [[ -z "${base}" ]] && ! resolve_harbor_api_base; then
+    return 1
+  fi
+  printf '%s%s' "${HARBOR_API_BASE}" "${path}"
+}
+
+ensure_harbor_hosts_entry() {
+  local current_ip
+  current_ip="$(getent ahostsv4 "${HARBOR_ALIAS}" 2>/dev/null | awk '{print $1}' | head -1 || true)"
+
+  if [[ -n "${current_ip}" ]]; then
+    if [[ "${HARBOR_HOST}" != "${current_ip}" ]]; then
+      log_info "using existing /etc/hosts mapping: ${HARBOR_ALIAS} -> ${current_ip} (detected ${HARBOR_HOST})"
+      HARBOR_HOST="${current_ip}"
+      HARBOR_REGISTRY="${HARBOR_HOST}:${HARBOR_PORT}"
+    else
+      log_info "unchanged: /etc/hosts entry for ${HARBOR_ALIAS} (${current_ip})"
+    fi
+    return 0
+  fi
+
   log_info "adding /etc/hosts entry: ${HARBOR_HOST} ${HARBOR_ALIAS}"
   printf '%s %s\n' "${HARBOR_HOST}" "${HARBOR_ALIAS}" | run_as_root tee -a /etc/hosts >/dev/null
 }
@@ -224,18 +312,21 @@ install_system_harbor_ca() {
 }
 
 fetch_harbor_ca_from_api() {
-  local tmp_ca
+  local tmp_ca base
   tmp_ca="$(mktemp)"
   if [[ -f "${HARBOR_CA_CERT}" ]]; then
     cp "${HARBOR_CA_CERT}" "${tmp_ca}"
     echo "${tmp_ca}"
     return 0
   fi
-  if curl -fsSL "http://${HARBOR_REGISTRY}/api/v2.0/systeminfo/getcert" -o "${tmp_ca}" 2>/dev/null \
-    && [[ -s "${tmp_ca}" ]]; then
-    echo "${tmp_ca}"
-    return 0
-  fi
+  while IFS= read -r base; do
+    [[ -n "${base}" ]] || continue
+    if curl -fsSL "${base}/api/v2.0/systeminfo/getcert" -o "${tmp_ca}" 2>/dev/null \
+      && [[ -s "${tmp_ca}" ]]; then
+      echo "${tmp_ca}"
+      return 0
+    fi
+  done < <(harbor_api_bases)
   rm -f "${tmp_ca}"
   return 1
 }

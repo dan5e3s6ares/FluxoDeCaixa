@@ -37,17 +37,12 @@ harbor_auth_header() {
       || printf '%s:%s' "${HARBOR_ADMIN_USER}" "${HARBOR_ADMIN_PASSWORD}" | base64)"
 }
 
-harbor_api_ready() {
-  curl -fsS "http://${HARBOR_REGISTRY}/api/v2.0/systeminfo" >/dev/null 2>&1 \
-    || curl -fsS "http://${HARBOR_ALIAS}:${HARBOR_PORT}/api/v2.0/systeminfo" >/dev/null 2>&1
-}
-
 ensure_harbor_project() {
-  local project_id auth
+  local project_id auth api_url
   auth="$(harbor_auth_header)"
+  api_url="$(harbor_api_url "/api/v2.0/projects?project_name=${HARBOR_PROJECT}")"
 
-  project_id="$(curl -fsS -H "${auth}" \
-    "http://${HARBOR_REGISTRY}/api/v2.0/projects?project_name=${HARBOR_PROJECT}" \
+  project_id="$(curl -fsS -H "${auth}" "${api_url}" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['project_id'] if d else '')" 2>/dev/null || true)"
 
   if [[ -n "${project_id}" ]]; then
@@ -57,16 +52,16 @@ ensure_harbor_project() {
 
   log_info "creating Harbor project: ${HARBOR_PROJECT}"
   curl -fsS -H "${auth}" \
-    -X POST "http://${HARBOR_REGISTRY}/api/v2.0/projects" \
+    -X POST "$(harbor_api_url "/api/v2.0/projects")" \
     -H "Content-Type: application/json" \
     -d "{\"project_name\":\"${HARBOR_PROJECT}\",\"public\":false,\"metadata\":{\"public\":\"false\"}}"
   log_info "Harbor project created: ${HARBOR_PROJECT}"
 }
 
 wait_for_harbor() {
-  log_info "waiting for Harbor API (http://${HARBOR_REGISTRY})..."
-  retry "${SEED_READY_ATTEMPTS}" "${SEED_READY_DELAY}" harbor_api_ready
-  log_info "Harbor API is ready"
+  log_info "waiting for Harbor API (${HARBOR_ALIAS}:${HARBOR_PORT})..."
+  retry "${SEED_READY_ATTEMPTS}" "${SEED_READY_DELAY}" resolve_harbor_api_base
+  log_info "Harbor API is ready at ${HARBOR_API_BASE}"
 }
 
 detect_seed_tag() {
@@ -104,14 +99,15 @@ harbor_image_exists() {
   auth="$(harbor_auth_header)"
   code="$(curl -s -o /dev/null -w '%{http_code}' \
     -H "${auth}" \
-    "http://${HARBOR_REGISTRY}/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${image_name}/artifacts/${tag}" \
+    "$(harbor_api_url "/api/v2.0/projects/${HARBOR_PROJECT}/repositories/${image_name}/artifacts/${tag}")" \
     || echo "000")"
   [[ "${code}" == "200" ]]
 }
 
 podman_login_harbor() {
-  log_info "logging into Harbor (${HARBOR_REGISTRY})..."
-  printf '%s\n' "${HARBOR_ADMIN_PASSWORD}" | podman login "${HARBOR_REGISTRY}" \
+  local login_registry="${HARBOR_IMAGE_REGISTRY}"
+  log_info "logging into Harbor (${login_registry})..."
+  printf '%s\n' "${HARBOR_ADMIN_PASSWORD}" | podman login "${login_registry}" \
     -u "${HARBOR_ADMIN_USER}" --password-stdin
 }
 
@@ -185,7 +181,7 @@ main() {
     build_and_push "${service_dir}" "${image_name}" "${SEED_TAG}"
   done
 
-  podman logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true
+  podman logout "${HARBOR_IMAGE_REGISTRY}" >/dev/null 2>&1 || true
   verify_seeded_images
 
   log_info "seed-images.sh — complete (${#SEED_IMAGE_NAMES[@]} images @ ${SEED_TAG})"
