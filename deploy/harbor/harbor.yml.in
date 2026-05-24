@@ -22,8 +22,8 @@ database:
 
 data_volume: @HARBOR_DATA_VOLUME@
 
-# Dev VM: trivy/notary disabled via install.sh --with-trivy false --with-notary false
-# (see scripts/deploy-registry.sh) to reduce RAM on the dev VM.
+# Dev VM: trivy disabled by default (Harbor 2.10+ install.sh omits --with-trivy).
+# Set HARBOR_INSTALL_FLAGS=--with-trivy in deploy-registry.sh to enable scanning.
 jobservice:
   max_job_workers: 10
   job_loggers:
