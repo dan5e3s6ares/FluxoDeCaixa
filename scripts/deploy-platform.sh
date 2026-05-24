@@ -57,7 +57,6 @@ KEYCLOAK_READY_ATTEMPTS="${KEYCLOAK_READY_ATTEMPTS:-90}"
 KEYCLOAK_READY_DELAY="${KEYCLOAK_READY_DELAY:-5}"
 KEYCLOAK_BOOTSTRAP_ATTEMPTS="${KEYCLOAK_BOOTSTRAP_ATTEMPTS:-90}"
 KEYCLOAK_BOOTSTRAP_DELAY="${KEYCLOAK_BOOTSTRAP_DELAY:-5}"
-KEYCLOAK_HELM_TIMEOUT="${KEYCLOAK_HELM_TIMEOUT:-20m}"
 
 OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
 OBSERVABILITY_MANIFESTS="${REPO_ROOT}/deploy/observability"
@@ -509,17 +508,26 @@ deploy_keycloak_helm() {
 
   ensure_keycloak_auth_secret
 
-  log_info "helm upgrade --install ${KEYCLOAK_RELEASE} bitnami/keycloak (chart ${KEYCLOAK_CHART_VERSION})"
+  log_info "helm upgrade --install ${KEYCLOAK_RELEASE} bitnami/keycloak (chart ${KEYCLOAK_CHART_VERSION}, --wait=false)"
   helm repo add bitnami https://charts.bitnami.com/bitnami >/dev/null 2>&1 || true
   helm repo update bitnami >/dev/null
 
   # Do not pass --wait: Bitnami readiness on /realms/master can block for 20m with no
   # log output. wait_for_keycloak below polls /health/ready with visible retries.
+  (
+    while sleep 15; do
+      log_info "helm: applying Keycloak release (no --wait)..."
+    done
+  ) &
+  local keycloak_helm_heartbeat=$!
   helm upgrade --install "${KEYCLOAK_RELEASE}" bitnami/keycloak \
     --namespace "${KEYCLOAK_NAMESPACE}" \
     --version "${KEYCLOAK_CHART_VERSION}" \
     --values "${KEYCLOAK_VALUES}" \
-    --timeout "${KEYCLOAK_HELM_TIMEOUT}"
+    --wait=false
+  kill "${keycloak_helm_heartbeat}" 2>/dev/null || true
+  wait "${keycloak_helm_heartbeat}" 2>/dev/null || true
+  log_info "Keycloak helm release applied; polling pod readiness..."
 
   wait_for_keycloak
 }
