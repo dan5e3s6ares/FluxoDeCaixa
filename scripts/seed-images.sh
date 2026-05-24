@@ -29,12 +29,7 @@ load_seed_env() {
     resolve_harbor_config
     log_info "registry env missing — resolved mode=${HARBOR_MODE} images=${HARBOR_IMAGE_REGISTRY}"
   fi
-}
-
-harbor_auth_header() {
-  printf 'Authorization: Basic %s' \
-    "$(printf '%s:%s' "${HARBOR_ADMIN_USER}" "${HARBOR_ADMIN_PASSWORD}" | base64 -w0 2>/dev/null \
-      || printf '%s:%s' "${HARBOR_ADMIN_USER}" "${HARBOR_ADMIN_PASSWORD}" | base64)"
+  load_harbor_admin_credentials
 }
 
 ensure_harbor_project() {
