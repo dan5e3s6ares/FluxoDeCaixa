@@ -222,9 +222,66 @@ ensure_harbor_prepare_dirs() {
   run_as_root mkdir -p "${HARBOR_INSTALL_DIR}/common/config" "${HARBOR_DATA_VOLUME}/secret"
 }
 
+harbor_needs_docker_version_shim() {
+  # Harbor install.sh requires docker >= 17.06; podman-docker reports Podman (e.g. 5.7.0).
+  command -v podman >/dev/null 2>&1 || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  local version_line major
+  version_line="$(docker --version 2>/dev/null || true)"
+  if [[ "${version_line}" =~ ([0-9]+)\.([0-9]+) ]]; then
+    major="${BASH_REMATCH[1]}"
+    if [[ "${major}" -lt 17 ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+install_harbor_docker_version_shim() {
+  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
+  local real_docker shim_path
+  real_docker="$(command -v docker)"
+  shim_path="${shim_dir}/docker"
+
+  run_as_root mkdir -p "${shim_dir}"
+  run_as_root tee "${shim_path}" >/dev/null <<EOF
+#!/usr/bin/env bash
+# fluxo-caixa: satisfy Harbor install.sh docker >= 17.06 check when using podman-docker.
+set -euo pipefail
+REAL_DOCKER='${real_docker}'
+case "\${1:-}" in
+  --version)
+    echo "Docker version 24.0.7, build \$(podman --version 2>/dev/null | awk '{print \$3}' || echo unknown)"
+    exit 0
+    ;;
+  version)
+    if [[ -z "\${2:-}" ]] || [[ "\${2:-}" == --format* ]]; then
+      echo "Client: Docker Engine - Community"
+      echo " Version:           24.0.7"
+      echo " API version:       1.43"
+      echo " Go version:        go1.20.10"
+      echo " Git commit:        fluxo-caixa-podman-shim"
+      echo " Built:             $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo " OS/Arch:           linux/amd64"
+      echo " Context:           default"
+      exit 0
+    fi
+    ;;
+esac
+exec "\${REAL_DOCKER}" "\$@"
+EOF
+  run_as_root chmod 0755 "${shim_path}"
+  log_info "installed Harbor docker version shim: ${shim_path}"
+}
+
 run_harbor_install() {
   ensure_harbor_prepare_dirs
-  run_as_root bash -c "cd '${HARBOR_INSTALL_DIR}' && ./prepare && ./install.sh ${HARBOR_INSTALL_FLAGS}"
+  local harbor_path="${PATH}"
+  if harbor_needs_docker_version_shim; then
+    install_harbor_docker_version_shim
+    harbor_path="${HARBOR_INSTALL_DIR}/.bin:${harbor_path}"
+  fi
+  run_as_root env PATH="${harbor_path}" bash -c "cd '${HARBOR_INSTALL_DIR}' && ./prepare && ./install.sh ${HARBOR_INSTALL_FLAGS}"
 }
 
 install_harbor() {
