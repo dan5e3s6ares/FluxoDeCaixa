@@ -32,7 +32,9 @@ PODMAN_CERTS_DIR="/etc/containers/certs.d/${HARBOR_REGISTRY}"
 HARBOR_READY_ATTEMPTS="${HARBOR_READY_ATTEMPTS:-60}"
 HARBOR_READY_DELAY="${HARBOR_READY_DELAY:-5}"
 
-HARBOR_INSTALL_FLAGS="${HARBOR_INSTALL_FLAGS:---with-trivy false --with-notary false --with-chartmuseum false}"
+# Harbor v2.10+ install.sh only accepts --with-trivy; notary/chartmuseum were removed.
+# Trivy is off by default — set HARBOR_INSTALL_FLAGS=--with-trivy to enable.
+HARBOR_INSTALL_FLAGS="${HARBOR_INSTALL_FLAGS:-}"
 
 run_as_root() {
   if [[ "${EUID}" -eq 0 ]]; then
