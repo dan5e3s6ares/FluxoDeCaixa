@@ -68,6 +68,19 @@ test_render_registries_template() {
   log_info "OK registries.yaml.in renders mirrors"
 }
 
+test_render_podman_registries_template() {
+  export HARBOR_HOST="10.0.0.5" HARBOR_PORT="8080" HARBOR_REGISTRY="10.0.0.5:8080" HARBOR_ALIAS="harbor.local"
+  local out
+  out="$(render_template "${PODMAN_REGISTRIES_TEMPLATE}" "" "")"
+  echo "${out}" | grep -q 'unqualified-search-registries' \
+    || { log_error "podman template missing unqualified-search-registries"; failures=$((failures + 1)); }
+  echo "${out}" | grep -q 'docker.io' \
+    || { log_error "podman template missing docker.io"; failures=$((failures + 1)); }
+  echo "${out}" | grep -q '10.0.0.5:8080' \
+    || { log_error "podman template missing registry endpoint"; failures=$((failures + 1)); }
+  log_info "OK podman-registries.conf.in renders docker.io + Harbor mirrors"
+}
+
 main() {
   # shellcheck source=lib/registry.sh
   source "${SCRIPT_DIR}/lib/registry.sh"
@@ -77,6 +90,7 @@ main() {
   test_self_contained_zero_requires_external
   test_self_contained_zero_with_external
   test_render_registries_template
+  test_render_podman_registries_template
   if (( failures > 0 )); then
     log_error "${failures} assertion(s) failed"
     exit 1
