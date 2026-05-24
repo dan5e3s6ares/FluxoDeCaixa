@@ -224,6 +224,11 @@ gitea_auth_git_remote() {
     "${GITEA_REPO_OWNER}" "${GITEA_REPO_NAME}"
 }
 
+gitea_git() {
+  # Ignore global url.https://.insteadOf=http:// (common on Ubuntu); in-VM Gitea is HTTP-only.
+  GIT_CONFIG_GLOBAL=/dev/null git "$@"
+}
+
 gitea_api() {
   local method="$1"
   local path="$2"
@@ -413,13 +418,13 @@ bootstrap_repo_git() {
 
   require_cmd git
 
-  if ! git -C "${REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! gitea_git -C "${REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     log_error "REPO_ROOT is not a git repository: ${REPO_ROOT}"
     exit 1
   fi
 
-  head_sha="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-  remote_head="$(git -C "${REPO_ROOT}" ls-remote "${auth_remote}" refs/heads/main 2>/dev/null | awk '{print $1}' || true)"
+  head_sha="$(gitea_git -C "${REPO_ROOT}" rev-parse HEAD)"
+  remote_head="$(gitea_git -C "${REPO_ROOT}" ls-remote "${auth_remote}" refs/heads/main 2>/dev/null | awk '{print $1}' || true)"
 
   if [[ "${remote_head}" == "${head_sha}" ]]; then
     log_info "remote main already matches local HEAD (${head_sha:0:7})"
@@ -427,10 +432,10 @@ bootstrap_repo_git() {
   fi
 
   log_info "pushing repository bootstrap to ${GIT_REPO_URL}..."
-  git -C "${REPO_ROOT}" remote remove "${remote_name}" 2>/dev/null || true
-  git -C "${REPO_ROOT}" remote add "${remote_name}" "${auth_remote}"
-  git -C "${REPO_ROOT}" push "${remote_name}" HEAD:main --force
-  git -C "${REPO_ROOT}" remote remove "${remote_name}" 2>/dev/null || true
+  gitea_git -C "${REPO_ROOT}" remote remove "${remote_name}" 2>/dev/null || true
+  gitea_git -C "${REPO_ROOT}" remote add "${remote_name}" "${auth_remote}"
+  gitea_git -C "${REPO_ROOT}" push "${remote_name}" HEAD:main --force
+  gitea_git -C "${REPO_ROOT}" remote remove "${remote_name}" 2>/dev/null || true
   log_info "git push bootstrap complete"
 }
 
@@ -593,12 +598,12 @@ verify_git_push() {
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir}"' EXIT
 
-  git clone --depth 1 "${auth_remote}" "${tmp_dir}/repo" >/dev/null 2>&1
+  gitea_git clone --depth 1 "${auth_remote}" "${tmp_dir}/repo" >/dev/null 2>&1
   printf 'deploy-gitea acceptance %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${tmp_dir}/repo/.gitea-deploy-check"
-  git -C "${tmp_dir}/repo" add .gitea-deploy-check
-  git -C "${tmp_dir}/repo" -c user.name="deploy-gitea" -c user.email="deploy@gitea.local" \
+  gitea_git -C "${tmp_dir}/repo" add .gitea-deploy-check
+  gitea_git -C "${tmp_dir}/repo" -c user.name="deploy-gitea" -c user.email="deploy@gitea.local" \
     commit -m "chore: deploy-gitea acceptance push" >/dev/null
-  git -C "${tmp_dir}/repo" push origin main >/dev/null
+  gitea_git -C "${tmp_dir}/repo" push origin main >/dev/null
   rm -rf "${tmp_dir}"
   trap - EXIT
   log_info "git push verification OK"
