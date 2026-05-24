@@ -33,9 +33,10 @@ GITEA_COMPOSE_TEMPLATE="${REPO_ROOT}/deploy/gitea/docker-compose.yml.in"
 GITEA_COMPOSE_FILE="${GITEA_INSTALL_DIR}/docker-compose.yml"
 GITEA_SECRET_FILE="${GITEA_INSTALL_DIR}/config/secret_key"
 
-GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-admin}"
+# Gitea reserves "admin" (and other route names) — cannot create that username via CLI.
+GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-giteaadmin}"
 GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-Gitea12345}"
-GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@gitea.local}"
+GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-giteaadmin@gitea.local}"
 GITEA_REPO_OWNER="${GITEA_REPO_OWNER:-fluxo-caixa}"
 GITEA_REPO_NAME="${GITEA_REPO_NAME:-FinTecFluxCX}"
 GITEA_REPO_PRIVATE="${GITEA_REPO_PRIVATE:-false}"
@@ -244,6 +245,15 @@ gitea_app_ini_ready() {
   run_as_root docker exec gitea test -f /data/gitea/conf/app.ini 2>/dev/null
 }
 
+gitea_admin_username_reserved() {
+  # Matches Gitea models/user reserved names (admin conflicts with /admin console routes).
+  local user="${1,,}"
+  case "${user}" in
+    admin|api|assets|attachments|avatar|avatars|explore|issues|login|metrics|milestones|notifications|org|organization|organizations|pulls|repo|repos|user|users) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 wait_for_gitea_installed() {
   log_info "waiting for Gitea installation (app.ini)..."
   retry "${GITEA_READY_ATTEMPTS}" "${GITEA_READY_DELAY}" gitea_app_ini_ready
@@ -251,6 +261,11 @@ wait_for_gitea_installed() {
 }
 
 ensure_admin_user() {
+  if gitea_admin_username_reserved "${GITEA_ADMIN_USER}"; then
+    log_error "GITEA_ADMIN_USER=${GITEA_ADMIN_USER} is reserved by Gitea (conflicts with web routes); use e.g. giteaadmin"
+    exit 1
+  fi
+
   if gitea_admin_auth_ok; then
     log_info "Gitea admin user already configured"
     return 0
@@ -280,6 +295,11 @@ ensure_admin_user() {
     local err_create
     err_create="$(tr '\n' ' ' <"${err_file}")"
 
+    if [[ "${err_create}" == *"name is reserved"* ]]; then
+      log_error "cannot create Gitea user ${GITEA_ADMIN_USER}: ${err_create}"
+      exit 1
+    fi
+
     if gitea_docker_exec admin user change-password \
       --username "${GITEA_ADMIN_USER}" \
       --password "${GITEA_ADMIN_PASSWORD}" 2>"${err_file}"; then
@@ -288,6 +308,10 @@ ensure_admin_user() {
     fi
     local err_pw
     err_pw="$(tr '\n' ' ' <"${err_file}")"
+
+    if [[ "${err_create}" == *"already exists"* || "${err_create}" == *"user already"* ]]; then
+      log_warn "Gitea user ${GITEA_ADMIN_USER} exists but login failed; check GITEA_ADMIN_PASSWORD"
+    fi
 
     if (( attempt < max_attempts )); then
       log_warn "Gitea admin bootstrap attempt ${attempt}/${max_attempts} failed; retrying in ${GITEA_READY_DELAY}s..."
