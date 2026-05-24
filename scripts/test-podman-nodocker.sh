@@ -87,6 +87,15 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh missing Gitea 1.24+ default version"
     failures=$((failures + 1))
   fi
+  if grep -q 'GET "/repos/${GITEA_REPO_OWNER}/${GITEA_REPO_NAME}/actions/runners"' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must check /admin/actions/runners for instance-level act_runner online status"
+    failures=$((failures + 1))
+  elif grep -q 'GET "/admin/actions/runners"' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh checks admin actions runners for online status"
+  else
+    log_error "deploy-gitea.sh missing admin actions runners online check"
+    failures=$((failures + 1))
+  fi
 }
 
 test_nodocker_wired_in_scripts() {
