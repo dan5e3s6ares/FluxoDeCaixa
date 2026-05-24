@@ -42,7 +42,9 @@ postgresql:
   auth:
     existingSecret: fluxo-keycloak
     username: keycloak
-    passwordSecretKey: postgres-password
+    secretKeys:
+      userPasswordKey: postgres-password
+      adminPasswordKey: postgres-password
     database: keycloak
   primary:
     persistence:
