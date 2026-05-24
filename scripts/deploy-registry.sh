@@ -234,8 +234,8 @@ install_harbor() {
 
   run_as_root mkdir -p "${HARBOR_DATA_VOLUME}"
 
-  if harbor_api_ready; then
-    log_info "Harbor API already reachable at http://${HARBOR_REGISTRY}"
+  if resolve_harbor_api_base; then
+    log_info "Harbor API already reachable at ${HARBOR_API_BASE}"
     if (( config_changed )); then
       log_info "reconfiguring Harbor (harbor.yml changed)..."
       run_harbor_install
@@ -247,23 +247,18 @@ install_harbor() {
   run_harbor_install
 }
 
-harbor_api_ready() {
-  curl -fsS "http://${HARBOR_REGISTRY}/api/v2.0/systeminfo" >/dev/null 2>&1 \
-    || curl -fsS "http://${HARBOR_ALIAS}:${HARBOR_PORT}/api/v2.0/systeminfo" >/dev/null 2>&1
-}
-
 wait_for_harbor() {
-  log_info "waiting for Harbor API (http://${HARBOR_REGISTRY})..."
-  retry "${HARBOR_READY_ATTEMPTS}" "${HARBOR_READY_DELAY}" harbor_api_ready
-  log_info "Harbor API is ready"
+  log_info "waiting for Harbor API (${HARBOR_ALIAS}:${HARBOR_PORT})..."
+  retry "${HARBOR_READY_ATTEMPTS}" "${HARBOR_READY_DELAY}" resolve_harbor_api_base
+  log_info "Harbor API is ready at ${HARBOR_API_BASE}"
 }
 
 ensure_harbor_project() {
-  local project_id auth
+  local project_id auth api_url
   auth="$(harbor_auth_header)"
+  api_url="$(harbor_api_url "/api/v2.0/projects?project_name=${HARBOR_PROJECT}")"
 
-  project_id="$(curl -fsS -H "${auth}" \
-    "http://${HARBOR_REGISTRY}/api/v2.0/projects?project_name=${HARBOR_PROJECT}" \
+  project_id="$(curl -fsS -H "${auth}" "${api_url}" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['project_id'] if d else '')" 2>/dev/null || true)"
 
   if [[ -n "${project_id}" ]]; then
@@ -273,7 +268,7 @@ ensure_harbor_project() {
 
   log_info "creating Harbor project: ${HARBOR_PROJECT}"
   curl -fsS -H "${auth}" \
-    -X POST "http://${HARBOR_REGISTRY}/api/v2.0/projects" \
+    -X POST "$(harbor_api_url "/api/v2.0/projects")" \
     -H "Content-Type: application/json" \
     -d "{\"project_name\":\"${HARBOR_PROJECT}\",\"public\":false,\"metadata\":{\"public\":\"false\"}}"
   log_info "Harbor project created: ${HARBOR_PROJECT}"
@@ -284,7 +279,7 @@ verify_harbor_ui() {
   auth="$(harbor_auth_header)"
   code="$(curl -s -o /dev/null -w '%{http_code}' \
     -H "${auth}" \
-    "http://${HARBOR_REGISTRY}/api/v2.0/users/current" || echo "000")"
+    "$(harbor_api_url "/api/v2.0/users/current")" || echo "000")"
   if [[ "${code}" == "200" ]]; then
     log_info "Harbor UI/API auth OK (admin user)"
     return 0

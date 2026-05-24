@@ -81,6 +81,22 @@ test_render_podman_registries_template() {
   log_info "OK podman-registries.conf.in renders docker.io + Harbor mirrors"
 }
 
+test_harbor_api_bases_in_vm_mode() {
+  export SELF_CONTAINED=1 HARBOR_HOST="10.213.172.43" HARBOR_PORT="8080" HARBOR_REGISTRY="10.213.172.43:8080"
+  HARBOR_MODE="in-vm"
+  local first
+  first="$(harbor_api_bases | head -1)"
+  assert_eq "in-vm api base order" "http://harbor.local:8080" "${first}"
+}
+
+test_harbor_api_bases_external_mode() {
+  export SELF_CONTAINED=0 HARBOR_EXTERNAL="192.168.68.100:8080"
+  resolve_harbor_config
+  local first
+  first="$(harbor_api_bases | head -1)"
+  assert_eq "external api base order" "http://192.168.68.100:8080" "${first}"
+}
+
 main() {
   # shellcheck source=lib/registry.sh
   source "${SCRIPT_DIR}/lib/registry.sh"
@@ -91,6 +107,8 @@ main() {
   test_self_contained_zero_with_external
   test_render_registries_template
   test_render_podman_registries_template
+  test_harbor_api_bases_in_vm_mode
+  test_harbor_api_bases_external_mode
   if (( failures > 0 )); then
     log_error "${failures} assertion(s) failed"
     exit 1
