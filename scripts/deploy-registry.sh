@@ -469,203 +469,27 @@ download_harbor_installer() {
   log_info "Harbor installer extracted to ${HARBOR_INSTALL_DIR}"
 }
 
-ensure_harbor_prepare_dirs() {
-  # Podman (via podman-docker) requires bind-mount sources to exist; Docker auto-creates them.
-  # Harbor's ./prepare mounts ${HARBOR_INSTALL_DIR}/common/config into goharbor/prepare.
-  run_as_root mkdir -p "${HARBOR_INSTALL_DIR}/common/config" "${HARBOR_DATA_VOLUME}/secret"
-}
+reset_harbor_admin_password() {
+  local db_container="${HARBOR_DB_CONTAINER:-harbor-db}"
+  local core_container="${HARBOR_CORE_CONTAINER:-harbor-core}"
+  local hash_script="${SCRIPT_DIR}/lib/harbor-password.py"
+  local salt digest sql
 
-harbor_needs_docker_version_shim() {
-  # Harbor install.sh requires docker >= 17.06; podman-docker reports Podman (e.g. 5.7.0).
-  command -v podman >/dev/null 2>&1 || return 1
-  command -v docker >/dev/null 2>&1 || return 1
-  local version_line major
-  version_line="$(docker --version 2>/dev/null || true)"
-  if [[ "${version_line}" =~ ([0-9]+)\.([0-9]+) ]]; then
-    major="${BASH_REMATCH[1]}"
-    if [[ "${major}" -lt 17 ]]; then
-      return 0
-    fi
+  load_harbor_admin_credentials
+  harbor_container_running "${db_container}" || return 1
+
+  read -r salt digest < <(python3 "${hash_script}" "${HARBOR_ADMIN_PASSWORD}")
+  sql="UPDATE harbor_user SET salt='${salt}', password='${digest}' WHERE user_id=1;"
+
+  log_info "resetting Harbor admin password in registry DB to match harbor.yml..."
+  run_as_root docker exec -i "${db_container}" psql -U postgres -d registry -v ON_ERROR_STOP=1 \
+    -c "${sql}"
+
+  if harbor_container_running "${core_container}"; then
+    log_info "restarting ${core_container} after admin password reset..."
+    run_as_root docker restart "${core_container}" >/dev/null
   fi
-  return 1
-}
-
-harbor_uses_podman_runtime() {
-  command -v podman >/dev/null 2>&1 || return 1
-  command -v docker >/dev/null 2>&1 || return 1
-  if docker info 2>/dev/null | grep -qi podman; then
-    return 0
-  fi
-  local version_line
-  version_line="$(docker --version 2>/dev/null || true)"
-  [[ "${version_line}" == *[Pp]odman* ]]
-}
-
-patch_harbor_compose_for_podman() {
-  local compose="${HARBOR_INSTALL_DIR}/docker-compose.yml"
-  local patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
-  [[ -f "${compose}" ]] || return 0
-
-  log_info "patching Harbor docker-compose.yml for podman (removing unsupported syslog log driver)..."
-  local output
-  output="$(run_as_root python3 "${patch_script}" "${compose}" 2>/dev/null || true)"
-  if [[ -n "${output}" ]]; then
-    log_info "${output}"
-  fi
-}
-
-resolve_harbor_compose() {
-  # podman-docker on Ubuntu exposes compose as a docker CLI plugin, not a PATH binary.
-  local candidate
-  if candidate="$(command -v docker-compose 2>/dev/null)"; then
-    printf '%s\n' "${candidate}"
-    return 0
-  fi
-  for candidate in \
-    /usr/libexec/docker/cli-plugins/docker-compose \
-    /usr/bin/docker-compose \
-    /usr/local/bin/docker-compose; do
-    if [[ -x "${candidate}" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    printf '%s\n' "docker compose"
-    return 0
-  fi
-  return 1
-}
-
-install_harbor_compose_wrapper() {
-  # Harbor install.sh re-runs ./prepare and regenerates docker-compose.yml with syslog
-  # logging before compose up. Patch immediately before up via a docker-compose shim.
-  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
-  local real_compose shim_path patch_script use_docker_compose_plugin=0
-  real_compose="$(resolve_harbor_compose 2>/dev/null || true)"
-  if [[ -z "${real_compose}" ]]; then
-    log_warn "docker-compose not found; Harbor compose patch wrapper skipped"
-    return 0
-  fi
-  if [[ "${real_compose}" == "docker compose" ]]; then
-    use_docker_compose_plugin=1
-  fi
-  patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
-  shim_path="${shim_dir}/docker-compose"
-
-  run_as_root mkdir -p "${shim_dir}"
-  if (( use_docker_compose_plugin )); then
-    run_as_root tee "${shim_path}" >/dev/null <<EOF
-#!/usr/bin/env bash
-# fluxo-caixa: strip Harbor syslog logging blocks before compose up (podman unsupported driver).
-set -euo pipefail
-HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
-PATCH_SCRIPT='${patch_script}'
-
-patch_compose_if_needed() {
-  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
-  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
-}
-
-case "\${1:-}" in
-  up|create|run|start)
-    patch_compose_if_needed
-    ;;
-esac
-exec docker compose "\$@"
-EOF
-  else
-    run_as_root tee "${shim_path}" >/dev/null <<EOF
-#!/usr/bin/env bash
-# fluxo-caixa: strip Harbor syslog logging blocks before compose up (podman unsupported driver).
-set -euo pipefail
-HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
-PATCH_SCRIPT='${patch_script}'
-REAL_COMPOSE='${real_compose}'
-
-patch_compose_if_needed() {
-  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
-  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
-}
-
-case "\${1:-}" in
-  up|create|run|start)
-    patch_compose_if_needed
-    ;;
-esac
-exec "\${REAL_COMPOSE}" "\$@"
-EOF
-  fi
-  run_as_root chmod 0755 "${shim_path}"
-  log_info "installed Harbor docker-compose wrapper: ${shim_path} (backend=${real_compose})"
-}
-
-install_harbor_docker_shim() {
-  # Harbor install.sh prefers `docker compose` over a PATH docker-compose binary.
-  # Intercept compose up/create/run/start here so syslog blocks are stripped before
-  # podman-docker invokes the compose CLI plugin directly.
-  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
-  local real_docker shim_path patch_script spoof_version=0 patch_compose=0
-  real_docker="$(command -v docker)"
-  shim_path="${shim_dir}/docker"
-  patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
-  if harbor_needs_docker_version_shim; then
-    spoof_version=1
-  fi
-  if harbor_uses_podman_runtime; then
-    patch_compose=1
-  fi
-
-  run_as_root mkdir -p "${shim_dir}"
-  run_as_root tee "${shim_path}" >/dev/null <<EOF
-#!/usr/bin/env bash
-# fluxo-caixa: Harbor podman-docker shims (version check + compose syslog patch).
-set -euo pipefail
-REAL_DOCKER='${real_docker}'
-HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
-PATCH_SCRIPT='${patch_script}'
-SPOOF_VERSION='${spoof_version}'
-PATCH_COMPOSE='${patch_compose}'
-
-patch_compose_if_needed() {
-  [[ "\${PATCH_COMPOSE}" == "1" ]] || return 0
-  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
-  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
-}
-
-case "\${1:-}" in
-  --version)
-    if [[ "\${SPOOF_VERSION}" == "1" ]]; then
-      echo "Docker version 24.0.7, build \$(podman --version 2>/dev/null | awk '{print \$3}' || echo unknown)"
-      exit 0
-    fi
-    ;;
-  version)
-    if [[ "\${SPOOF_VERSION}" == "1" ]] \
-      && { [[ -z "\${2:-}" ]] || [[ "\${2:-}" == --format* ]]; }; then
-      echo "Client: Docker Engine - Community"
-      echo " Version:           24.0.7"
-      echo " API version:       1.43"
-      echo " Go version:        go1.20.10"
-      echo " Git commit:        fluxo-caixa-podman-shim"
-      echo " Built:             $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      echo " OS/Arch:           linux/amd64"
-      echo " Context:           default"
-      exit 0
-    fi
-    ;;
-  compose)
-    case "\${2:-}" in
-      up|create|run|start)
-        patch_compose_if_needed
-        ;;
-    esac
-    ;;
-esac
-exec "\${REAL_DOCKER}" "\$@"
-EOF
-  run_as_root chmod 0755 "${shim_path}"
-  log_info "installed Harbor docker shim: ${shim_path} (spoof_version=${spoof_version}, patch_compose=${patch_compose})"
+  return 0
 }
 
 run_harbor_install() {
@@ -736,19 +560,24 @@ ensure_harbor_project() {
   log_info "Harbor project created: ${HARBOR_PROJECT}"
 }
 
-verify_harbor_ui() {
+ensure_harbor_admin_auth() {
   load_harbor_admin_credentials
   if harbor_admin_auth_ok; then
     log_info "Harbor UI/API auth OK (admin user)"
     return 0
   fi
 
-  if [[ "${HARBOR_MODE}" == "in-vm" ]] && [[ -f "${HARBOR_INSTALL_DIR}/harbor.yml" ]]; then
-    log_info "Harbor auth failed; reconfiguring with credentials from ${HARBOR_INSTALL_DIR}/harbor.yml..."
-    run_harbor_install
-    retry 12 5 harbor_admin_auth_ok
+  load_harbor_admin_credentials_from_core || true
+  if harbor_admin_auth_ok; then
+    log_info "Harbor UI/API auth OK (password from harbor-core env)"
+    return 0
+  fi
+
+  if [[ "${HARBOR_MODE}" == "in-vm" ]] \
+    && reset_harbor_admin_password; then
+    retry "${HARBOR_READY_ATTEMPTS}" "${HARBOR_READY_DELAY}" harbor_admin_auth_ok
     if harbor_admin_auth_ok; then
-      log_info "Harbor UI/API auth OK after reconfigure"
+      log_info "Harbor UI/API auth OK after admin password reset"
       return 0
     fi
   fi
@@ -760,6 +589,10 @@ verify_harbor_ui() {
     "$(harbor_api_url "/api/v2.0/users/current")" || echo "000")"
   log_error "Harbor API auth failed (HTTP ${code})"
   return 1
+}
+
+verify_harbor_ui() {
+  ensure_harbor_admin_auth
 }
 
 verify_harbor_https() {
@@ -804,8 +637,8 @@ main() {
   load_harbor_admin_credentials
   install_harbor
   wait_for_harbor
+  ensure_harbor_admin_auth
   ensure_harbor_project
-  verify_harbor_ui
   verify_harbor_https
   finalize_registry_trust
 
