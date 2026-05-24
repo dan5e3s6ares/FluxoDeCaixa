@@ -237,6 +237,53 @@ harbor_needs_docker_version_shim() {
   return 1
 }
 
+harbor_uses_podman_runtime() {
+  command -v podman >/dev/null 2>&1 || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  if docker info 2>/dev/null | grep -qi podman; then
+    return 0
+  fi
+  local version_line
+  version_line="$(docker --version 2>/dev/null || true)"
+  [[ "${version_line}" == *[Pp]odman* ]]
+}
+
+patch_harbor_compose_for_podman() {
+  local compose="${HARBOR_INSTALL_DIR}/docker-compose.yml"
+  [[ -f "${compose}" ]] || return 0
+
+  log_info "patching Harbor docker-compose.yml for podman (removing unsupported syslog log driver)..."
+  run_as_root python3 - "${compose}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    lines = fh.readlines()
+
+out = []
+skip = False
+removed = 0
+for line in lines:
+    if re.match(r"^    logging:\s*$", line):
+        skip = True
+        removed += 1
+        continue
+    if skip:
+        if re.match(r"^      ", line):
+            continue
+        skip = False
+    out.append(line)
+
+if removed == 0:
+    sys.exit(0)
+
+with open(path, "w", encoding="utf-8") as fh:
+    fh.writelines(out)
+print(f"removed {removed} syslog logging block(s) from {path}")
+PY
+}
+
 install_harbor_docker_version_shim() {
   local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
   local real_docker shim_path
@@ -281,7 +328,11 @@ run_harbor_install() {
     install_harbor_docker_version_shim
     harbor_path="${HARBOR_INSTALL_DIR}/.bin:${harbor_path}"
   fi
-  run_as_root env PATH="${harbor_path}" bash -c "cd '${HARBOR_INSTALL_DIR}' && ./prepare && ./install.sh ${HARBOR_INSTALL_FLAGS}"
+  run_as_root env PATH="${harbor_path}" bash -c "cd '${HARBOR_INSTALL_DIR}' && ./prepare"
+  if harbor_uses_podman_runtime; then
+    patch_harbor_compose_for_podman
+  fi
+  run_as_root env PATH="${harbor_path}" bash -c "cd '${HARBOR_INSTALL_DIR}' && ./install.sh ${HARBOR_INSTALL_FLAGS}"
 }
 
 install_harbor() {
