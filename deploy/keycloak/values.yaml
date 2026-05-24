@@ -13,10 +13,18 @@ auth:
   existingSecret: fluxo-keycloak
   passwordSecretKey: admin-password
 
-# Quarkus dev mode (production=false) avoids the slow `kc.sh build` step on first boot.
+# Quarkus dev mode (production=false) runs `kc.sh start-dev` and skips the slow build step.
 # make start targets dev VMs; OIDC/realm bootstrap works the same after /health/ready.
 production: false
 proxy: edge
+
+# Quarkus health is off by default in the Bitnami image; probes and wait-healthy.sh use
+# /health/ready on the main HTTP port (8080), not the management port (9000).
+extraEnvVars:
+  - name: KC_HEALTH_ENABLED
+    value: "true"
+  - name: KC_HTTP_MANAGEMENT_HEALTH_ENABLED
+    value: "false"
 
 # Single-replica dev stack: local cache avoids jdbc-ping / headless service on boot.
 cache:
@@ -67,6 +75,8 @@ resources:
 
 service:
   type: ClusterIP
+  ports:
+    http: 8080
 
 ingress:
   enabled: false
