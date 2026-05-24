@@ -19,6 +19,15 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh must not use /etc/gitea work path (config is under /data/gitea/conf)"
     failures=$((failures + 1))
   fi
+  if grep -q 'GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-admin}"' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must not default GITEA_ADMIN_USER to reserved name admin"
+    failures=$((failures + 1))
+  elif grep -q 'gitea_admin_username_reserved' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh rejects Gitea-reserved admin usernames"
+  else
+    log_error "deploy-gitea.sh missing gitea_admin_username_reserved guard"
+    failures=$((failures + 1))
+  fi
 }
 
 test_nodocker_wired_in_scripts() {
