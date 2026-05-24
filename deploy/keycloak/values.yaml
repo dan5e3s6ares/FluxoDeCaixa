@@ -18,6 +18,10 @@ auth:
 production: false
 proxy: edge
 
+# Single-replica dev stack: local cache avoids jdbc-ping / headless service on boot.
+cache:
+  enabled: false
+
 # Bitnami defaults probe /realms/master for readiness; that stays false while Quarkus
 # is still booting and makes helm --wait look hung. Use /health/ready like wait-healthy.sh.
 customStartupProbe:
@@ -44,6 +48,14 @@ customLivenessProbe:
   timeoutSeconds: 5
   failureThreshold: 3
   successThreshold: 1
+
+# Custom probes replace the chart defaults; keep built-ins off to avoid ambiguity.
+startupProbe:
+  enabled: false
+readinessProbe:
+  enabled: false
+livenessProbe:
+  enabled: false
 
 resources:
   requests:
