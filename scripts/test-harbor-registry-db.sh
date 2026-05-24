@@ -37,8 +37,23 @@ docker() {
         echo "0"
         return 0
         ;;
+      table_only)
+        if [[ "$*" == *"pg_database"* ]]; then
+          echo "1"
+          return 0
+        fi
+        if [[ "$*" == *"information_schema.tables"* ]]; then
+          echo "1"
+          return 0
+        fi
+        return 0
+        ;;
       ready)
         if [[ "$*" == *"pg_database"* ]]; then
+          echo "1"
+          return 0
+        fi
+        if [[ "$*" == *"harbor_user WHERE user_id=1"* ]]; then
           echo "1"
           return 0
         fi
@@ -80,8 +95,11 @@ test_registry_db_states() {
   MOCK_DB_STATE="db_only"
   assert_not_ready "registry DB without harbor_user table"
 
+  MOCK_DB_STATE="table_only"
+  assert_not_ready "registry DB without admin user row"
+
   MOCK_DB_STATE="ready"
-  assert_ready "registry DB with harbor_user table"
+  assert_ready "registry DB with harbor_user table and admin user"
 }
 
 main() {
