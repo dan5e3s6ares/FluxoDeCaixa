@@ -311,6 +311,7 @@ wait_for_postgres_bootstrap() {
 
 run_postgres_bootstrap() {
   log_info "running pg-bootstrap job"
+  wait_for_postgres_secrets
   kubectl_cmd delete job pg-bootstrap -n "${POSTGRES_NAMESPACE}" --ignore-not-found
   kubectl_apply_k "${POSTGRES_MANIFESTS}"
   wait_for_postgres_bootstrap
@@ -405,6 +406,16 @@ deploy_redis_stack() {
 
 fluxo_pg_app_secret_ready() {
   kubectl_cmd -n "${POSTGRES_NAMESPACE}" get secret fluxo-pg-app >/dev/null 2>&1
+}
+
+fluxo_pg_superuser_secret_ready() {
+  kubectl_cmd -n "${POSTGRES_NAMESPACE}" get secret fluxo-pg-superuser >/dev/null 2>&1
+}
+
+wait_for_postgres_secrets() {
+  log_info "waiting for CNPG secrets fluxo-pg-app and fluxo-pg-superuser in ${POSTGRES_NAMESPACE}..."
+  retry "${POSTGRES_READY_ATTEMPTS}" "${POSTGRES_READY_DELAY}" fluxo_pg_app_secret_ready
+  retry "${POSTGRES_READY_ATTEMPTS}" "${POSTGRES_READY_DELAY}" fluxo_pg_superuser_secret_ready
 }
 
 keycloak_auth_secret_ready() {
