@@ -347,25 +347,49 @@ EOF
   log_info "installed Harbor docker-compose wrapper: ${shim_path} (backend=${real_compose})"
 }
 
-install_harbor_docker_version_shim() {
+install_harbor_docker_shim() {
+  # Harbor install.sh prefers `docker compose` over a PATH docker-compose binary.
+  # Intercept compose up/create/run/start here so syslog blocks are stripped before
+  # podman-docker invokes the compose CLI plugin directly.
   local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
-  local real_docker shim_path
+  local real_docker shim_path patch_script spoof_version=0 patch_compose=0
   real_docker="$(command -v docker)"
   shim_path="${shim_dir}/docker"
+  patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
+  if harbor_needs_docker_version_shim; then
+    spoof_version=1
+  fi
+  if harbor_uses_podman_runtime; then
+    patch_compose=1
+  fi
 
   run_as_root mkdir -p "${shim_dir}"
   run_as_root tee "${shim_path}" >/dev/null <<EOF
 #!/usr/bin/env bash
-# fluxo-caixa: satisfy Harbor install.sh docker >= 17.06 check when using podman-docker.
+# fluxo-caixa: Harbor podman-docker shims (version check + compose syslog patch).
 set -euo pipefail
 REAL_DOCKER='${real_docker}'
+HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
+PATCH_SCRIPT='${patch_script}'
+SPOOF_VERSION='${spoof_version}'
+PATCH_COMPOSE='${patch_compose}'
+
+patch_compose_if_needed() {
+  [[ "\${PATCH_COMPOSE}" == "1" ]] || return 0
+  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
+  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
+}
+
 case "\${1:-}" in
   --version)
-    echo "Docker version 24.0.7, build \$(podman --version 2>/dev/null | awk '{print \$3}' || echo unknown)"
-    exit 0
+    if [[ "\${SPOOF_VERSION}" == "1" ]]; then
+      echo "Docker version 24.0.7, build \$(podman --version 2>/dev/null | awk '{print \$3}' || echo unknown)"
+      exit 0
+    fi
     ;;
   version)
-    if [[ -z "\${2:-}" ]] || [[ "\${2:-}" == --format* ]]; then
+    if [[ "\${SPOOF_VERSION}" == "1" ]] \
+      && { [[ -z "\${2:-}" ]] || [[ "\${2:-}" == --format* ]]; }; then
       echo "Client: Docker Engine - Community"
       echo " Version:           24.0.7"
       echo " API version:       1.43"
@@ -377,19 +401,26 @@ case "\${1:-}" in
       exit 0
     fi
     ;;
+  compose)
+    case "\${2:-}" in
+      up|create|run|start)
+        patch_compose_if_needed
+        ;;
+    esac
+    ;;
 esac
 exec "\${REAL_DOCKER}" "\$@"
 EOF
   run_as_root chmod 0755 "${shim_path}"
-  log_info "installed Harbor docker version shim: ${shim_path}"
+  log_info "installed Harbor docker shim: ${shim_path} (spoof_version=${spoof_version}, patch_compose=${patch_compose})"
 }
 
 run_harbor_install() {
   ensure_harbor_prepare_dirs
   local harbor_path="${PATH}"
   local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
-  if harbor_needs_docker_version_shim; then
-    install_harbor_docker_version_shim
+  if harbor_needs_docker_version_shim || harbor_uses_podman_runtime; then
+    install_harbor_docker_shim
     harbor_path="${shim_dir}:${harbor_path}"
   fi
   if harbor_uses_podman_runtime; then
