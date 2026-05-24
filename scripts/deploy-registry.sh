@@ -214,7 +214,14 @@ download_harbor_installer() {
   log_info "Harbor installer extracted to ${HARBOR_INSTALL_DIR}"
 }
 
+ensure_harbor_prepare_dirs() {
+  # Podman (via podman-docker) requires bind-mount sources to exist; Docker auto-creates them.
+  # Harbor's ./prepare mounts ${HARBOR_INSTALL_DIR}/common/config into goharbor/prepare.
+  run_as_root mkdir -p "${HARBOR_INSTALL_DIR}/common/config" "${HARBOR_DATA_VOLUME}/secret"
+}
+
 run_harbor_install() {
+  ensure_harbor_prepare_dirs
   run_as_root bash -c "cd '${HARBOR_INSTALL_DIR}' && ./prepare && ./install.sh ${HARBOR_INSTALL_FLAGS}"
 }
 
