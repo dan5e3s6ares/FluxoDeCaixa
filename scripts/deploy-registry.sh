@@ -250,38 +250,53 @@ harbor_uses_podman_runtime() {
 
 patch_harbor_compose_for_podman() {
   local compose="${HARBOR_INSTALL_DIR}/docker-compose.yml"
+  local patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
   [[ -f "${compose}" ]] || return 0
 
   log_info "patching Harbor docker-compose.yml for podman (removing unsupported syslog log driver)..."
-  run_as_root python3 - "${compose}" <<'PY'
-import re
-import sys
+  local output
+  output="$(run_as_root python3 "${patch_script}" "${compose}" 2>/dev/null || true)"
+  if [[ -n "${output}" ]]; then
+    log_info "${output}"
+  fi
+}
 
-path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
-    lines = fh.readlines()
+install_harbor_compose_wrapper() {
+  # Harbor install.sh re-runs ./prepare and regenerates docker-compose.yml with syslog
+  # logging before compose up. Patch immediately before up via a docker-compose shim.
+  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
+  local real_compose shim_path patch_script
+  real_compose="$(command -v docker-compose 2>/dev/null || true)"
+  if [[ -z "${real_compose}" ]]; then
+    log_warn "docker-compose not found; Harbor compose patch wrapper skipped"
+    return 0
+  fi
+  patch_script="${SCRIPT_DIR}/lib/patch-harbor-compose.py"
+  shim_path="${shim_dir}/docker-compose"
 
-out = []
-skip = False
-removed = 0
-for line in lines:
-    if re.match(r"^    logging:\s*$", line):
-        skip = True
-        removed += 1
-        continue
-    if skip:
-        if re.match(r"^      ", line):
-            continue
-        skip = False
-    out.append(line)
+  run_as_root mkdir -p "${shim_dir}"
+  run_as_root tee "${shim_path}" >/dev/null <<EOF
+#!/usr/bin/env bash
+# fluxo-caixa: strip Harbor syslog logging blocks before compose up (podman unsupported driver).
+set -euo pipefail
+HARBOR_COMPOSE='${HARBOR_INSTALL_DIR}/docker-compose.yml'
+PATCH_SCRIPT='${patch_script}'
+REAL_COMPOSE='${real_compose}'
 
-if removed == 0:
-    sys.exit(0)
+patch_compose_if_needed() {
+  [[ -f "\${HARBOR_COMPOSE}" ]] || return 0
+  python3 "\${PATCH_SCRIPT}" "\${HARBOR_COMPOSE}" >/dev/null 2>&1 || true
+}
 
-with open(path, "w", encoding="utf-8") as fh:
-    fh.writelines(out)
-print(f"removed {removed} syslog logging block(s) from {path}")
-PY
+case "\${1:-}" in
+  up|create|run|start)
+    patch_compose_if_needed
+    ;;
+esac
+exec "\${REAL_COMPOSE}" "\$@"
+EOF
+  run_as_root chmod 0755 "${shim_path}"
+  log_info "installed Harbor docker-compose wrapper: ${shim_path}"
 }
 
 install_harbor_docker_version_shim() {
@@ -324,13 +339,14 @@ EOF
 run_harbor_install() {
   ensure_harbor_prepare_dirs
   local harbor_path="${PATH}"
+  local shim_dir="${HARBOR_INSTALL_DIR}/.bin"
   if harbor_needs_docker_version_shim; then
     install_harbor_docker_version_shim
-    harbor_path="${HARBOR_INSTALL_DIR}/.bin:${harbor_path}"
+    harbor_path="${shim_dir}:${harbor_path}"
   fi
-  run_as_root env PATH="${harbor_path}" bash -c "cd '${HARBOR_INSTALL_DIR}' && ./prepare"
   if harbor_uses_podman_runtime; then
-    patch_harbor_compose_for_podman
+    install_harbor_compose_wrapper
+    harbor_path="${shim_dir}:${harbor_path}"
   fi
   run_as_root env PATH="${harbor_path}" bash -c "cd '${HARBOR_INSTALL_DIR}' && ./install.sh ${HARBOR_INSTALL_FLAGS}"
 }
