@@ -92,6 +92,13 @@ kubectl_cmd() {
   fi
 }
 
+# Kustomize overlays under deploy/ reference platform/ bootstrap assets via
+# configMapGenerator file paths outside the overlay root; allow that explicitly.
+kubectl_apply_k() {
+  local dir="$1"
+  kubectl_cmd apply -k "${dir}" --load-restrictor LoadRestrictionsNone
+}
+
 configure_kubeconfig() {
   if [[ -n "${KUBECONFIG:-}" ]] && kubectl_cmd cluster-info >/dev/null 2>&1; then
     log_info "using existing KUBECONFIG=${KUBECONFIG}"
