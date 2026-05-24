@@ -179,6 +179,27 @@ load_harbor_admin_credentials() {
   fi
 }
 
+harbor_container_running() {
+  local name="$1"
+  command -v docker >/dev/null 2>&1 || return 1
+  docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${name}"
+}
+
+load_harbor_admin_credentials_from_core() {
+  local container="${HARBOR_CORE_CONTAINER:-harbor-core}"
+  local pw
+
+  harbor_container_running "${container}" || return 1
+  pw="$(run_as_root docker exec "${container}" env 2>/dev/null \
+    | sed -n 's/^HARBOR_ADMIN_PASSWORD=//p' | head -1 || true)"
+  [[ -n "${pw}" ]] || return 1
+  if [[ "${pw}" != "${HARBOR_ADMIN_PASSWORD}" ]]; then
+    HARBOR_ADMIN_PASSWORD="${pw}"
+    log_info "loaded Harbor admin password from ${container} env"
+  fi
+  return 0
+}
+
 harbor_admin_auth_ok() {
   local code auth
   auth="$(harbor_auth_header)"
