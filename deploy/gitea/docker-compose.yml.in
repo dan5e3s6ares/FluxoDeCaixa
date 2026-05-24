@@ -16,7 +16,7 @@ services:
       - GITEA__security__INSTALL_LOCK=true
       - GITEA__security__SECRET_KEY=@GITEA_SECRET_KEY@
       - GITEA__actions__ENABLED=true
-      - GITEA__actions__DEFAULT_ACTIONS_URL=https://github.com
+      - GITEA__actions__DEFAULT_ACTIONS_URL=github
       - GITEA__service__DISABLE_REGISTRATION=true
     ports:
       - "@GITEA_PORT@:3000"

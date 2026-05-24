@@ -71,6 +71,22 @@ test_gitea_admin_uses_git_user() {
     log_error "deploy-gitea.sh missing embedded-path EXIT trap for act_runner download"
     failures=$((failures + 1))
   fi
+  if grep -q 'fetch_runner_registration_token' "${SCRIPT_DIR}/deploy-gitea.sh" \
+    && grep -q 'generate-runner-token' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh falls back to gitea actions generate-runner-token for runner registration"
+  else
+    log_error "deploy-gitea.sh missing act_runner registration-token API/CLI fallback"
+    failures=$((failures + 1))
+  fi
+  if grep -q 'GITEA_VERSION="${GITEA_VERSION:-1.22' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must not default to Gitea 1.22 (admin registration-token API requires 1.24+)"
+    failures=$((failures + 1))
+  elif grep -q 'GITEA_VERSION="${GITEA_VERSION:-1.24' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh defaults to Gitea 1.24+ with registration-token API"
+  else
+    log_error "deploy-gitea.sh missing Gitea 1.24+ default version"
+    failures=$((failures + 1))
+  fi
 }
 
 test_nodocker_wired_in_scripts() {

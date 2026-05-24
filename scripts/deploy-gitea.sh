@@ -25,7 +25,7 @@ GITEA_ALIAS="${GITEA_ALIAS:-gitea.local}"
 GITEA_BASE_URL="http://${GITEA_ALIAS}:${GITEA_PORT}"
 GITEA_API_URL="${GITEA_BASE_URL}/api/v1"
 
-GITEA_VERSION="${GITEA_VERSION:-1.22.6}"
+GITEA_VERSION="${GITEA_VERSION:-1.24.6}"
 GITEA_INSTALL_DIR="${GITEA_INSTALL_DIR:-/opt/gitea}"
 GITEA_DATA_DIR="${GITEA_DATA_DIR:-/data/gitea}"
 GITEA_ENV_FILE="${GITEA_ENV_FILE:-/etc/fluxo-caixa/gitea.env}"
@@ -495,6 +495,32 @@ runner_config_exists() {
   [[ -f "${GITEA_RUNNER_DIR}/.runner" ]]
 }
 
+fetch_runner_registration_token() {
+  local token="" api_code api_body
+  api_body="$(mktemp)"
+  trap "rm -f '${api_body}'" RETURN
+
+  api_code="$(curl -s -o "${api_body}" -w '%{http_code}' \
+    -H "$(gitea_auth_header)" -H "Content-Type: application/json" \
+    -X POST "${GITEA_API_URL}/admin/actions/runners/registration-token" \
+    -d '{}' 2>/dev/null || echo "000")"
+
+  if [[ "${api_code}" == "200" ]] && [[ -s "${api_body}" ]]; then
+    token="$(python3 -c "import json; print(json.load(open('${api_body}')).get('token',''))" 2>/dev/null || true)"
+  fi
+
+  if [[ -z "${token}" ]]; then
+    log_info "admin registration-token API unavailable (HTTP ${api_code}); using gitea actions generate-runner-token"
+    token="$(gitea_docker_exec actions generate-runner-token 2>/dev/null | awk 'NF{print $1; exit}')" || true
+  fi
+
+  if [[ -z "${token}" ]]; then
+    log_error "failed to obtain act_runner registration token (API HTTP ${api_code})"
+    exit 1
+  fi
+  echo "${token}"
+}
+
 register_act_runner() {
   if runner_config_exists; then
     log_info "act_runner already registered (${GITEA_RUNNER_DIR}/.runner)"
@@ -502,12 +528,7 @@ register_act_runner() {
   fi
 
   local token
-  token="$(gitea_api POST "/admin/actions/runners/registration-token" '{}' \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")"
-  if [[ -z "${token}" ]]; then
-    log_error "failed to obtain act_runner registration token"
-    exit 1
-  fi
+  token="$(fetch_runner_registration_token)"
 
   log_info "registering act_runner (${GITEA_RUNNER_NAME})..."
   run_as_root mkdir -p "${GITEA_RUNNER_DIR}"
