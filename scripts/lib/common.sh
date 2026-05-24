@@ -94,9 +94,23 @@ kubectl_cmd() {
 
 # Kustomize overlays under deploy/ reference platform/ bootstrap assets via
 # configMapGenerator file paths outside the overlay root; allow that explicitly.
+# k3s embeds an older kubectl where apply -k does not accept --load-restrictor;
+# build with kubectl kustomize (or standalone kustomize) and pipe to apply.
 kubectl_apply_k() {
   local dir="$1"
-  kubectl_cmd apply -k "${dir}" --load-restrictor LoadRestrictionsNone
+  local load_restrictor=(--load-restrictor LoadRestrictionsNone)
+
+  if kubectl_cmd apply -h 2>&1 | grep -q -- '--load-restrictor'; then
+    kubectl_cmd apply -k "${dir}" "${load_restrictor[@]}"
+    return
+  fi
+
+  if command -v kustomize >/dev/null 2>&1; then
+    kustomize build "${load_restrictor[@]}" "${dir}" | kubectl_cmd apply -f -
+    return
+  fi
+
+  kubectl_cmd kustomize "${load_restrictor[@]}" "${dir}" | kubectl_cmd apply -f -
 }
 
 configure_kubeconfig() {
