@@ -9,10 +9,14 @@ source "${SCRIPT_DIR}/lib/common.sh"
 failures=0
 
 test_gitea_admin_uses_git_user() {
-  if grep -q 'docker exec -u git -w /etc/gitea gitea' "${SCRIPT_DIR}/deploy-gitea.sh"; then
-    log_info "OK deploy-gitea.sh runs admin CLI as git user"
+  if grep -q 'docker exec -u git gitea gitea -c /data/gitea/conf/app.ini' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_info "OK deploy-gitea.sh runs admin CLI as git user with data config path"
   else
     log_error "deploy-gitea.sh missing git user docker exec for Gitea admin CLI"
+    failures=$((failures + 1))
+  fi
+  if grep -q '\-w /etc/gitea' "${SCRIPT_DIR}/deploy-gitea.sh"; then
+    log_error "deploy-gitea.sh must not use /etc/gitea work path (config is under /data/gitea/conf)"
     failures=$((failures + 1))
   fi
 }
