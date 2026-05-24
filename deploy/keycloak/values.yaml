@@ -13,28 +13,33 @@ auth:
   existingSecret: fluxo-keycloak
   passwordSecretKey: admin-password
 
-production: true
+# Quarkus dev mode (production=false) avoids the slow `kc.sh build` step on first boot.
+# make start targets dev VMs; OIDC/realm bootstrap works the same after /health/ready.
+production: false
 proxy: edge
 
-# Keycloak production boot can take several minutes on a dev VM; startupProbe keeps
-# helm --wait from failing while readinessProbe checks /realms/master too early.
-startupProbe:
-  enabled: true
-  initialDelaySeconds: 30
+# Bitnami defaults probe /realms/master for readiness; that stays false while Quarkus
+# is still booting and makes helm --wait look hung. Use /health/ready like wait-healthy.sh.
+customStartupProbe:
+  httpGet:
+    path: /health/ready
+    port: http
+  initialDelaySeconds: 15
   periodSeconds: 10
   timeoutSeconds: 5
-  failureThreshold: 60
+  failureThreshold: 36
   successThreshold: 1
-readinessProbe:
-  enabled: true
-  initialDelaySeconds: 0
+customReadinessProbe:
+  httpGet:
+    path: /health/ready
+    port: http
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 6
   successThreshold: 1
-livenessProbe:
-  enabled: true
-  initialDelaySeconds: 0
+customLivenessProbe:
+  tcpSocket:
+    port: http
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3

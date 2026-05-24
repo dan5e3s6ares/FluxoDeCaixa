@@ -513,11 +513,12 @@ deploy_keycloak_helm() {
   helm repo add bitnami https://charts.bitnami.com/bitnami >/dev/null 2>&1 || true
   helm repo update bitnami >/dev/null
 
+  # Do not pass --wait: Bitnami readiness on /realms/master can block for 20m with no
+  # log output. wait_for_keycloak below polls /health/ready with visible retries.
   helm upgrade --install "${KEYCLOAK_RELEASE}" bitnami/keycloak \
     --namespace "${KEYCLOAK_NAMESPACE}" \
     --version "${KEYCLOAK_CHART_VERSION}" \
     --values "${KEYCLOAK_VALUES}" \
-    --wait \
     --timeout "${KEYCLOAK_HELM_TIMEOUT}"
 
   wait_for_keycloak
