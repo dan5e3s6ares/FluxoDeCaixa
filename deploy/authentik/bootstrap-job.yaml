@@ -7,8 +7,8 @@ metadata:
     app.kubernetes.io/part-of: fluxo-caixa
 spec:
   ttlSecondsAfterFinished: 300
-  activeDeadlineSeconds: 900
-  backoffLimit: 6
+  activeDeadlineSeconds: 1800
+  backoffLimit: 3
   template:
     metadata:
       labels:

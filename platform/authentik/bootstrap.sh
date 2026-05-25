@@ -117,7 +117,9 @@ application_exists() {
 }
 
 mapping_exists() {
-  api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_field_present name "${MAPPING_NAME}"
+  local body
+  body="$(api_body "/api/v3/propertymappings/all/?search=${MAPPING_NAME}")"
+  [ -n "${body}" ] && printf '%s' "${body}" | json_field_present name "${MAPPING_NAME}"
 }
 
 provider_client_exists() {
@@ -125,37 +127,62 @@ provider_client_exists() {
   api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | json_field_present client_id "${client_id}"
 }
 
-flow_pk() {
-  local slug="$1"
-  api GET "/api/v3/flows/instances/?slug=${slug}" | json_pk
+api_body() {
+  # Lookup helper: never abort the script on HTTP errors (set -e safe).
+  api GET "$1" 2>/dev/null || true
 }
 
-scope_mapping_pk() {
-  # Authentik list filters vary by version; search then verify scope_name in the body.
-  local scope="$1"
+flow_pk() {
+  local slug="$1"
   local body pk
 
-  body="$(api GET "/api/v3/propertymappings/oauth2/?search=${scope}")"
-  if ! printf '%s' "${body}" | json_field_present scope_name "${scope}"; then
+  body="$(api_body "/api/v3/flows/instances/?slug=${slug}")"
+  if [ -z "${body}" ] || ! printf '%s' "${body}" | json_field_present slug "${slug}"; then
     return 1
   fi
-
   pk="$(printf '%s' "${body}" | json_pk)"
   [ -n "${pk}" ] || return 1
   printf '%s' "${pk}"
 }
 
-signing_key_pk() {
-  local pk
+scope_mapping_pk() {
+  # Authentik list filters vary by version; try scope_name, then search.
+  local scope="$1"
+  local query body pk
 
-  pk="$(api GET "/api/v3/crypto/certificatekeypairs/?search=authentik%20Self-signed%20Certificate" | json_pk)"
-  if [ -n "${pk}" ]; then
-    printf '%s' "${pk}"
-    return 0
+  for query in "scope_name=${scope}" "search=${scope}"; do
+    body="$(api_body "/api/v3/propertymappings/oauth2/?${query}")"
+    if [ -z "${body}" ]; then
+      continue
+    fi
+    if ! printf '%s' "${body}" | json_field_present scope_name "${scope}"; then
+      continue
+    fi
+    pk="$(printf '%s' "${body}" | json_pk)"
+    if [ -n "${pk}" ]; then
+      printf '%s' "${pk}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+signing_key_pk() {
+  local pk body
+
+  body="$(api_body "/api/v3/crypto/certificatekeypairs/?search=authentik%20Self-signed%20Certificate")"
+  if [ -n "${body}" ]; then
+    pk="$(printf '%s' "${body}" | json_pk)"
+    if [ -n "${pk}" ]; then
+      printf '%s' "${pk}"
+      return 0
+    fi
   fi
 
   log "Self-signed certificate not found via search; using first available keypair"
-  pk="$(api GET "/api/v3/crypto/certificatekeypairs/" | json_pk)"
+  body="$(api_body "/api/v3/crypto/certificatekeypairs/")"
+  [ -n "${body}" ] || return 1
+  pk="$(printf '%s' "${body}" | json_pk)"
   [ -n "${pk}" ] || return 1
   printf '%s' "${pk}"
 }
@@ -186,7 +213,12 @@ EOF
 }
 
 resolve_merchant_mapping_pk() {
-  mapping_pk="$(api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_pk)"
+  local body
+  body="$(api_body "/api/v3/propertymappings/all/?search=${MAPPING_NAME}")"
+  mapping_pk=""
+  if [ -n "${body}" ]; then
+    mapping_pk="$(printf '%s' "${body}" | json_pk)"
+  fi
 }
 
 wait_for_merchant_mapping_pk() {
@@ -224,6 +256,7 @@ oauth2_provider_payload() {
   "authorization_flow": $(json_ref "${auth_flow}"),
   "invalidation_flow": $(json_ref "${invalid_flow}"),
   "redirect_uris": [],
+  "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
   "property_mappings": ${property_mappings},
   "signing_key": $(json_ref "${signing_key}"),
   "access_code_validity": "minutes=1",
@@ -297,9 +330,17 @@ wait_for_oauth2_defaults() {
 }
 
 oauth2_defaults_ready() {
-  if [ -z "${auth_flow}" ] || [ -z "${invalid_flow}" ] || [ -z "${signing_key}" ] \
-    || [ -z "${openid_pk}" ] || [ -z "${email_pk}" ] || [ -z "${profile_pk}" ]; then
-    log "missing Authentik defaults (flows, signing key, or built-in scope mappings)"
+  local missing=""
+
+  [ -z "${auth_flow}" ] && missing="${missing} auth_flow"
+  [ -z "${invalid_flow}" ] && missing="${missing} invalidation_flow"
+  [ -z "${signing_key}" ] && missing="${missing} signing_key"
+  [ -z "${openid_pk}" ] && missing="${missing} openid_scope"
+  [ -z "${email_pk}" ] && missing="${missing} email_scope"
+  [ -z "${profile_pk}" ] && missing="${missing} profile_scope"
+
+  if [ -n "${missing}" ]; then
+    log "missing Authentik defaults:${missing}"
     return 1
   fi
   return 0
@@ -362,8 +403,12 @@ ensure_service_clients() {
   local client_id
   local property_mappings
 
-  wait_for_merchant_mapping_pk || return 1
-  wait_for_oauth2_defaults || return 1
+  if [ -z "${mapping_pk}" ]; then
+    wait_for_merchant_mapping_pk || return 1
+  fi
+  if ! oauth2_defaults_ready; then
+    wait_for_oauth2_defaults || return 1
+  fi
   property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
 
   IFS=','
