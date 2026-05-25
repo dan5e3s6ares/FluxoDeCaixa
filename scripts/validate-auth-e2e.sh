@@ -54,6 +54,13 @@ validate_static_ory_config() {
   log_info "validate: Kratos cipher secret length guard"
   bash "${REPO_ROOT}/scripts/test-ory-secrets.sh"
 
+  log_info "validate: Hydra token_hook config (no webhook auth.type none)"
+  if grep -E '^[[:space:]]+type:[[:space:]]*none[[:space:]]*$' "${REPO_ROOT}/deploy/ory/hydra-values.yaml" >/dev/null; then
+    log_error "deploy/ory/hydra-values.yaml must not set oauth2.token_hook.auth.type to none (Hydra v2.3 rejects it at startup)"
+    exit 1
+  fi
+  grep -q 'token_hook:' "${REPO_ROOT}/deploy/ory/hydra-values.yaml"
+
   log_info "validate: Ory bootstrap uses Hydra admin API and merchant_id metadata"
   grep -q 'ensure_oauth2_client' "${REPO_ROOT}/platform/ory/bootstrap.sh"
   grep -q 'metadata' "${REPO_ROOT}/platform/ory/bootstrap.sh"
