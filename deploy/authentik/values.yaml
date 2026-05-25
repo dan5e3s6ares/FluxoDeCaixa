@@ -13,6 +13,9 @@ authentik:
     enabled: false
   existingSecret:
     secretName: fluxo-authentik
+  # NOTE: Ignored while existingSecret is set — the chart reads AUTHENTIK_POSTGRESQL__* from
+  # fluxo-authentik via envFrom. These values are documentation only; removing existingSecret
+  # switches connection here (file:///pg-creds/ URIs require server/worker volumeMounts below).
   postgresql:
     host: fluxo-pg-rw.database.svc.cluster.local
     name: authentik

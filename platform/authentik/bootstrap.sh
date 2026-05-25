@@ -36,6 +36,15 @@ json_pk() {
   sed -n 's/.*"pk"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' | head -n 1 | tr -d ' "'
 }
 
+json_ref() {
+  # Emit JSON for Authentik FK fields: bare integer pk or quoted UUID/string.
+  case "$1" in
+    '' ) printf 'null' ;;
+    *[!0-9]* ) printf '"%s"' "$1" ;;
+    * ) printf '%s' "$1" ;;
+  esac
+}
+
 wait_for_authentik() {
   local attempt=1
   local max="${AUTHENTIK_WAIT_ATTEMPTS:-60}"
@@ -57,6 +66,25 @@ wait_for_authentik() {
 
 jwks_available() {
   curl -sf "${AUTHENTIK_URL}/application/o/${APP_SLUG}/jwks/" >/dev/null 2>&1
+}
+
+wait_for_jwks() {
+  local attempt=1
+  local max="${JWKS_WAIT_ATTEMPTS:-60}"
+  local delay="${JWKS_WAIT_DELAY:-2}"
+
+  while [ "${attempt}" -le "${max}" ]; do
+    if jwks_available; then
+      log "JWKS available at /application/o/${APP_SLUG}/jwks/"
+      return 0
+    fi
+    log "waiting for JWKS (${attempt}/${max})..."
+    sleep "${delay}"
+    attempt=$((attempt + 1))
+  done
+
+  log "JWKS not available at /application/o/${APP_SLUG}/jwks/ after ${max} attempts"
+  return 1
 }
 
 application_exists() {
@@ -98,6 +126,75 @@ EOF
 )"
 }
 
+oauth2_provider_payload() {
+  local name="$1"
+  local client_id="$2"
+  local property_mappings="$3"
+  local auth_flow="$4"
+  local invalid_flow="$5"
+  local signing_key="$6"
+
+  cat <<EOF
+{
+  "name": "${name}",
+  "client_id": "${client_id}",
+  "client_type": "confidential",
+  "authorization_flow": $(json_ref "${auth_flow}"),
+  "invalidation_flow": $(json_ref "${invalid_flow}"),
+  "redirect_uris": [],
+  "property_mappings": ${property_mappings},
+  "signing_key": $(json_ref "${signing_key}"),
+  "access_code_validity": "minutes=1",
+  "access_token_validity": "minutes=15",
+  "refresh_token_validity": "days=30"
+}
+EOF
+}
+
+upsert_oauth2_provider() {
+  local name="$1"
+  local client_id="$2"
+  local property_mappings="$3"
+  local auth_flow="$4"
+  local invalid_flow="$5"
+  local signing_key="$6"
+  local body provider_pk
+
+  body="$(oauth2_provider_payload "${name}" "${client_id}" "${property_mappings}" \
+    "${auth_flow}" "${invalid_flow}" "${signing_key}")"
+
+  if provider_client_exists "${client_id}"; then
+    provider_pk="$(api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | json_pk)"
+    log "updating OAuth2 provider ${client_id} (pk ${provider_pk})"
+    api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}"
+    printf '%s' "${provider_pk}"
+    return 0
+  fi
+
+  log "creating OAuth2 provider ${client_id}"
+  api POST "/api/v3/providers/oauth2/" "${body}" | json_pk
+}
+
+resolve_oauth2_defaults() {
+  auth_flow="$(flow_pk default-provider-authorization-implicit-consent)"
+  invalid_flow="$(flow_pk default-provider-invalidation-flow)"
+  signing_key="$(signing_key_pk)"
+  openid_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=openid" | json_pk)"
+  email_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=email" | json_pk)"
+  profile_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=profile" | json_pk)"
+  mapping_pk="$(api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_pk)"
+}
+
+oauth2_defaults_ready() {
+  if [ -z "${auth_flow}" ] || [ -z "${invalid_flow}" ] || [ -z "${signing_key}" ] \
+    || [ -z "${openid_pk}" ] || [ -z "${email_pk}" ] || [ -z "${profile_pk}" ] \
+    || [ -z "${mapping_pk}" ]; then
+    log "missing Authentik defaults (flows, signing key, or scope mappings)"
+    return 1
+  fi
+  return 0
+}
+
 ensure_application_provider() {
   local auth_flow invalid_flow signing_key mapping_pk openid_pk email_pk profile_pk
   local property_mappings provider_pk
@@ -108,43 +205,12 @@ ensure_application_provider() {
   fi
 
   ensure_merchant_id_mapping
-  mapping_pk="$(api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_pk)"
-  auth_flow="$(flow_pk default-provider-authorization-implicit-consent)"
-  invalid_flow="$(flow_pk default-provider-invalidation-flow)"
-  signing_key="$(signing_key_pk)"
-  openid_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=openid" | json_pk)"
-  email_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=email" | json_pk)"
-  profile_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=profile" | json_pk)"
-
-  if [ -z "${auth_flow}" ] || [ -z "${invalid_flow}" ] || [ -z "${signing_key}" ]; then
-    log "missing default Authentik flows or signing key"
-    return 1
-  fi
+  resolve_oauth2_defaults
+  oauth2_defaults_ready || return 1
 
   property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
-
-  if ! provider_client_exists "${APP_SLUG}"; then
-    log "creating OAuth2 provider ${APP_SLUG}"
-    provider_pk="$(api POST "/api/v3/providers/oauth2/" "$(cat <<EOF
-{
-  "name": "${APP_SLUG}",
-  "client_id": "${APP_SLUG}",
-  "client_type": "confidential",
-  "authorization_flow": "${auth_flow}",
-  "invalidation_flow": "${invalid_flow}",
-  "redirect_uris": [],
-  "property_mappings": ${property_mappings},
-  "signing_key": "${signing_key}",
-  "access_code_validity": "minutes=1",
-  "access_token_validity": "minutes=15",
-  "refresh_token_validity": "days=30"
-}
-EOF
-)" | json_pk)"
-  else
-    provider_pk="$(api GET "/api/v3/providers/oauth2/?client_id=${APP_SLUG}" | json_pk)"
-    log "OAuth2 provider ${APP_SLUG} already exists"
-  fi
+  provider_pk="$(upsert_oauth2_provider "${APP_SLUG}" "${APP_SLUG}" "${property_mappings}" \
+    "${auth_flow}" "${invalid_flow}" "${signing_key}")"
 
   if ! application_exists; then
     log "creating application ${APP_SLUG}"
@@ -152,57 +218,27 @@ EOF
 {
   "name": "fluxo-caixa",
   "slug": "${APP_SLUG}",
-  "provider": ${provider_pk}
+  "provider": $(json_ref "${provider_pk}")
 }
 EOF
 )"
   fi
 
-  if ! jwks_available; then
-    log "JWKS not yet available at /application/o/${APP_SLUG}/jwks/"
-    return 1
-  fi
-
-  log "JWKS available at /application/o/${APP_SLUG}/jwks/"
+  wait_for_jwks
 }
 
 ensure_service_clients() {
   local client_id auth_flow invalid_flow signing_key openid_pk email_pk profile_pk mapping_pk
   local property_mappings
 
-  auth_flow="$(flow_pk default-provider-authorization-implicit-consent)"
-  invalid_flow="$(flow_pk default-provider-invalidation-flow)"
-  signing_key="$(signing_key_pk)"
-  openid_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=openid" | json_pk)"
-  email_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=email" | json_pk)"
-  profile_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=profile" | json_pk)"
-  mapping_pk="$(api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_pk)"
+  resolve_oauth2_defaults
+  oauth2_defaults_ready || return 1
   property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
 
   IFS=','
   for client_id in ${REQUIRED_CLIENTS}; do
-    if provider_client_exists "${client_id}"; then
-      log "OAuth2 client ${client_id} already exists"
-      continue
-    fi
-
-    log "creating OAuth2 client ${client_id}"
-    api POST "/api/v3/providers/oauth2/" "$(cat <<EOF
-{
-  "name": "${client_id}",
-  "client_id": "${client_id}",
-  "client_type": "confidential",
-  "authorization_flow": "${auth_flow}",
-  "invalid_flow": "${invalid_flow}",
-  "redirect_uris": [],
-  "property_mappings": ${property_mappings},
-  "signing_key": "${signing_key}",
-  "access_code_validity": "minutes=1",
-  "access_token_validity": "minutes=15",
-  "refresh_token_validity": "days=30"
-}
-EOF
-)"
+    upsert_oauth2_provider "${client_id}" "${client_id}" "${property_mappings}" \
+      "${auth_flow}" "${invalid_flow}" "${signing_key}" >/dev/null
   done
 }
 
