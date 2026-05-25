@@ -10,6 +10,8 @@ source "${SCRIPT_DIR}/lib/common.sh"
 SVC="${SVC:-}"
 IMAGE_TAG="${IMAGE_TAG:-dev}"
 ALL_SERVICES=(lancamentos consolidado consulta)
+TOKEN_HOOK_IMAGE="fluxo-caixa/ory-token-hook"
+TOKEN_HOOK_DOCKERFILE="${REPO_ROOT}/platform/ory/Dockerfile.token-hook"
 
 run_as_root() {
   if [[ "${EUID}" -eq 0 ]]; then
@@ -62,6 +64,18 @@ build_service_image() {
 
   log_info "building ${image_ref} (context=${REPO_ROOT}, dockerfile=services/${svc}/Dockerfile)..."
   podman build -f "${dockerfile}" -t "${image_ref}" "${REPO_ROOT}"
+}
+
+build_token_hook_image() {
+  local image_ref="${TOKEN_HOOK_IMAGE}:${IMAGE_TAG}"
+
+  if [[ ! -f "${TOKEN_HOOK_DOCKERFILE}" ]]; then
+    log_error "Dockerfile not found: ${TOKEN_HOOK_DOCKERFILE}"
+    exit 1
+  fi
+
+  log_info "building ${image_ref} (context=${REPO_ROOT}, dockerfile=platform/ory/Dockerfile.token-hook)..."
+  podman build -f "${TOKEN_HOOK_DOCKERFILE}" -t "${image_ref}" "${REPO_ROOT}"
 }
 
 resolve_podman_image_ref() {
@@ -131,7 +145,10 @@ main() {
     import_image_to_k3s "${image_ref}"
   done
 
-  log_info "build-images.sh — complete (${#services[@]} image(s) @ :${IMAGE_TAG})"
+  build_token_hook_image
+  import_image_to_k3s "${TOKEN_HOOK_IMAGE}:${IMAGE_TAG}"
+
+  log_info "build-images.sh — complete (${#services[@]} service image(s) + ory-token-hook @ :${IMAGE_TAG})"
 }
 
 main "$@"

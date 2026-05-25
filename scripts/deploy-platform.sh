@@ -553,10 +553,14 @@ token_hook_pods_ready() {
 }
 
 token_hook_health_ok() {
-  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod ory-token-hook-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${ORY_NAMESPACE}" run ory-token-hook-check --rm -i --restart=Never \
-    --image=curlimages/curl:8.12.1 \
-    --command -- curl -sf "http://ory-token-hook.${ORY_NAMESPACE}.svc.cluster.local:8080/health" >/dev/null 2>&1
+  local pod
+  pod="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=ory-token-hook" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  [[ -n "${pod}" ]] || return 1
+  kubectl_cmd -n "${ORY_NAMESPACE}" exec "${pod}" -- \
+    python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health').read()" \
+    >/dev/null 2>&1
 }
 
 deploy_token_hook() {
