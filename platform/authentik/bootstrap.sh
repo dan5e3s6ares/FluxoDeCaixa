@@ -264,13 +264,12 @@ signing_key_pk() {
 }
 
 merchant_mapping_payload() {
-  cat <<EOF
-{
-  "name": "${MAPPING_NAME}",
-  "scope_name": "merchant_id",
-  "expression": "return user.attributes.get(\\\"merchant_id\\\", [None])[0]"
-}
-EOF
+  printf '%s\n' \
+    '{' \
+    "  \"name\": \"${MAPPING_NAME}\"," \
+    '  "scope_name": "merchant_id",' \
+    '  "expression": "return user.attributes.get(\"merchant_id\", [None])[0]"' \
+    '}'
 }
 
 ensure_merchant_id_mapping() {
