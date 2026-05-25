@@ -48,7 +48,11 @@ validate_static_ory_config() {
   grep -q 'secretsCipher' "${REPO_ROOT}/scripts/deploy-platform.sh"
   grep -q 'secretsCookie' "${REPO_ROOT}/scripts/deploy-platform.sh"
   grep -q 'smtpConnectionURI' "${REPO_ROOT}/scripts/deploy-platform.sh"
+  grep -q 'ory_kratos_cipher_secret' "${REPO_ROOT}/scripts/deploy-platform.sh"
   grep -q 'log_ory_helm_progress' "${REPO_ROOT}/scripts/deploy-platform.sh"
+
+  log_info "validate: Kratos cipher secret length guard"
+  bash "${REPO_ROOT}/scripts/test-ory-secrets.sh"
 
   log_info "validate: Ory bootstrap uses Hydra admin API and merchant_id metadata"
   grep -q 'ensure_oauth2_client' "${REPO_ROOT}/platform/ory/bootstrap.sh"

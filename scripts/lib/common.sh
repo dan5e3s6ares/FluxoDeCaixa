@@ -27,6 +27,16 @@ urlencode_component() {
   python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
 }
 
+# Kratos v1.3+ validates secrets.cipher length <= 32 (base64-32 output is 44 chars).
+ory_kratos_cipher_secret() {
+  openssl rand -hex 16
+}
+
+ory_kratos_cipher_valid() {
+  local value="$1"
+  [ -n "${value}" ] && [ "${#value}" -le 32 ]
+}
+
 require_cmd() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
