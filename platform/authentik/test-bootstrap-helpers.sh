@@ -11,6 +11,19 @@ eval "$(
     "${SCRIPT_DIR}/bootstrap.sh"
 )"
 
+scope_mapping_pk_from_body() {
+  local scope="$1"
+  local body pk
+
+  body="$(cat)"
+  if ! printf '%s' "${body}" | json_field_present scope_name "${scope}"; then
+    return 1
+  fi
+  pk="$(printf '%s' "${body}" | json_pk)"
+  [ -n "${pk}" ] || return 1
+  printf '%s' "${pk}"
+}
+
 assert_eq() {
   local name="$1"
   local want="$2"
@@ -50,5 +63,10 @@ else
   echo "FAIL scope body pk when scope present" >&2
   exit 1
 fi
+
+assert_eq "scope_name filter body" "3" \
+  "$(printf '{"results":[{"scope_name": "openid","pk":3}]}' | scope_mapping_pk_from_body openid)"
+assert_eq "search fallback body" "7" \
+  "$(printf '{"results":[{"scope_name": "profile","pk":7,"name":"x"}]}' | scope_mapping_pk_from_body profile)"
 
 echo "platform/authentik/test-bootstrap-helpers.sh — all tests passed"

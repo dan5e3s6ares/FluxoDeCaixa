@@ -43,6 +43,8 @@ validate_static_authentik_config() {
   grep -q 'wait_for_oauth2_defaults' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
   grep -q 'scope_mapping_pk' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
   grep -q 'ensure_application_linked' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
+  grep -q 'api_body' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
+  grep -q 'grant_types' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
 
   log_info "validate: Authentik bootstrap helper unit tests"
   sh "${REPO_ROOT}/platform/authentik/test-bootstrap-helpers.sh"
