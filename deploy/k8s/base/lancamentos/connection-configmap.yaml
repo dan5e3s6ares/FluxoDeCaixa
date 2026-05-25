@@ -8,8 +8,8 @@ metadata:
     app.kubernetes.io/part-of: fluxo-caixa
 data:
   NATS_URL: nats://nats.messaging.svc.cluster.local:4222
-  # Authentik OIDC stubs — filled by follow-up deploy tasks
-  OIDC_ISSUER: http://authentik.security.svc.cluster.local/application/o/fluxo-caixa/
+  # Ory Hydra OIDC stubs — filled by deploy-platform.sh
+  OIDC_ISSUER: http://hydra-public.security.svc.cluster.local:4444/
   OIDC_CLIENT_ID: svc-lancamentos
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4317
   OTEL_SERVICE_NAME: svc-lancamentos

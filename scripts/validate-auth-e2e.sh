@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase B Authentik IdP acceptance validation (task 6a14197586a7b6a7a5698c09).
+# Phase B Ory Kratos/Hydra IdP acceptance validation (task 6a14c0ad6cf5924ec8318906).
 # Static + unit checks always; live cluster checks when kubectl/kubeconfig available.
 set -euo pipefail
 
@@ -8,63 +8,59 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-AUTHENTIK_NAMESPACE="${AUTHENTIK_NAMESPACE:-security}"
-AUTHENTIK_SERVER_URL="${AUTHENTIK_SERVER_URL:-http://authentik-server.${AUTHENTIK_NAMESPACE}.svc.cluster.local:9000}"
-AUTHENTIK_APP_SLUG="${AUTHENTIK_OIDC_APP_SLUG:-fluxo-caixa}"
+ORY_NAMESPACE="${ORY_NAMESPACE:-security}"
+HYDRA_PUBLIC_URL="${HYDRA_PUBLIC_URL:-http://hydra-public.${ORY_NAMESPACE}.svc.cluster.local:4444}"
 # Per-phase retry budget: 72 × 5s = 6 min (doc: IdP ready < 10 min after PG).
-AUTHENTIK_MAX_WAIT_SECONDS="${AUTHENTIK_MAX_WAIT_SECONDS:-600}"
+ORY_MAX_WAIT_SECONDS="${ORY_MAX_WAIT_SECONDS:-600}"
 
-validate_static_authentik_config() {
+validate_static_ory_config() {
   local krakend="${REPO_ROOT}/platform/krakend/krakend.json"
 
-  log_info "validate: KrakenD JWKS/issuer point to Authentik application ${AUTHENTIK_APP_SLUG}"
-  grep -q 'authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa' "${krakend}"
+  log_info "validate: KrakenD JWKS/issuer point to Ory Hydra"
+  grep -q 'hydra-public.security.svc.cluster.local:4444/.well-known/jwks.json' "${krakend}"
+  if grep -qi authentik "${krakend}"; then
+    log_error "KrakenD config still references Authentik"
+    exit 1
+  fi
   if grep -qi keycloak "${krakend}"; then
     log_error "KrakenD config still references Keycloak"
     exit 1
   fi
 
-  log_info "validate: deploy/authentik and platform/authentik present"
-  [[ -f "${REPO_ROOT}/deploy/authentik/values.yaml" ]]
-  [[ -f "${REPO_ROOT}/platform/authentik/bootstrap.sh" ]]
+  log_info "validate: deploy/ory and platform/ory present"
+  [[ -f "${REPO_ROOT}/deploy/ory/kratos-values.yaml" ]]
+  [[ -f "${REPO_ROOT}/deploy/ory/hydra-values.yaml" ]]
+  [[ -f "${REPO_ROOT}/platform/ory/bootstrap.sh" ]]
+  [[ ! -d "${REPO_ROOT}/deploy/authentik" ]]
   [[ ! -d "${REPO_ROOT}/deploy/keycloak" ]]
 
-  log_info "validate: Authentik values avoid duplicate AUTHENTIK_LISTEN__HTTP env"
-  if grep -E '^[[:space:]]*- name: AUTHENTIK_LISTEN__HTTP' "${REPO_ROOT}/deploy/authentik/values.yaml"; then
-    log_error "deploy/authentik/values.yaml must not set AUTHENTIK_LISTEN__HTTP (chart injects it from containerPorts.http)"
-    exit 1
-  fi
+  log_info "validate: deploy-platform seeds Ory secrets (fluxo-kratos, fluxo-hydra)"
+  grep -q 'ensure_kratos_secret' "${REPO_ROOT}/scripts/deploy-platform.sh"
+  grep -q 'ensure_hydra_secret' "${REPO_ROOT}/scripts/deploy-platform.sh"
 
-  log_info "validate: deploy-platform seeds PostgreSQL env in fluxo-authentik for existingSecret mode"
-  grep -q 'AUTHENTIK_POSTGRESQL__HOST' "${REPO_ROOT}/scripts/deploy-platform.sh"
+  log_info "validate: Ory bootstrap uses Hydra admin API and merchant_id metadata"
+  grep -q 'ensure_oauth2_client' "${REPO_ROOT}/platform/ory/bootstrap.sh"
+  grep -q 'metadata' "${REPO_ROOT}/platform/ory/bootstrap.sh"
+  grep -q 'ORY_SKIP_READY_WAIT' "${REPO_ROOT}/deploy/ory/bootstrap-job.yaml"
+  grep -q 'preflight_commands' "${REPO_ROOT}/platform/ory/bootstrap.sh"
+  grep -q 'alpine:3.20' "${REPO_ROOT}/deploy/ory/bootstrap-job.yaml"
+  grep -q 'ory-token-hook' "${REPO_ROOT}/deploy/ory/token-hook.yaml"
 
-  log_info "validate: Authentik bootstrap uses flexible JSON field matching (DRF spacing)"
-  grep -q 'json_field_present' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'wait_for_oauth2_defaults' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'scope_mapping_pk' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'ensure_application_linked' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'api_body' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'grant_types' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'scope_mapping_list_body' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'AUTHENTIK_SKIP_READY_WAIT' "${REPO_ROOT}/deploy/authentik/bootstrap-job.yaml"
-  grep -q 'preflight_commands' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
-  grep -q 'alpine:3.20' "${REPO_ROOT}/deploy/authentik/bootstrap-job.yaml"
-
-  log_info "validate: Authentik bootstrap helper unit tests"
-  sh "${REPO_ROOT}/platform/authentik/test-bootstrap-helpers.sh"
+  log_info "validate: Ory bootstrap helper unit tests"
+  sh "${REPO_ROOT}/platform/ory/test-bootstrap-helpers.sh"
 }
 
 validate_idp_wait_budget() {
-  local attempts="${AUTHENTIK_READY_ATTEMPTS:-90}"
-  local delay="${AUTHENTIK_READY_DELAY:-5}"
+  local attempts="${ORY_READY_ATTEMPTS:-90}"
+  local delay="${ORY_READY_DELAY:-5}"
   local per_phase=$((attempts * delay))
 
-  log_info "validate: Authentik wait budget after PG (target < ${AUTHENTIK_MAX_WAIT_SECONDS}s per phase)"
-  if (( per_phase >= AUTHENTIK_MAX_WAIT_SECONDS )); then
-    log_error "AUTHENTIK_READY_ATTEMPTS×DELAY (${per_phase}s) must stay under ${AUTHENTIK_MAX_WAIT_SECONDS}s"
+  log_info "validate: Ory wait budget after PG (target < ${ORY_MAX_WAIT_SECONDS}s per phase)"
+  if (( per_phase >= ORY_MAX_WAIT_SECONDS )); then
+    log_error "ORY_READY_ATTEMPTS×DELAY (${per_phase}s) must stay under ${ORY_MAX_WAIT_SECONDS}s"
     exit 1
   fi
-  log_info "deploy-platform Authentik per-phase retry cap ${per_phase}s (< ${AUTHENTIK_MAX_WAIT_SECONDS}s)"
+  log_info "deploy-platform Ory per-phase retry cap ${per_phase}s (< ${ORY_MAX_WAIT_SECONDS}s)"
 }
 
 run_unit_tests() {
@@ -82,7 +78,7 @@ run_unit_tests() {
 }
 
 run_live_e2e() {
-  log_info "validate: make test-e2e (Authentik OIDC + KrakenD JWT + merchant_id + flow)"
+  log_info "validate: make test-e2e (Ory Hydra OIDC + KrakenD JWT + merchant_id + flow)"
   if command -v make >/dev/null 2>&1; then
     make -C "${REPO_ROOT}" test-e2e
   else
@@ -92,8 +88,8 @@ run_live_e2e() {
 }
 
 main() {
-  log_info "validate-auth-e2e.sh — Phase B Authentik IdP acceptance criteria"
-  validate_static_authentik_config
+  log_info "validate-auth-e2e.sh — Phase B Ory IdP acceptance criteria"
+  validate_static_ory_config
   validate_idp_wait_budget
   run_unit_tests
 

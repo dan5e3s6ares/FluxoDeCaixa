@@ -48,23 +48,28 @@ REDIS_MANIFESTS="${REPO_ROOT}/deploy/redis"
 REDIS_READY_ATTEMPTS="${REDIS_READY_ATTEMPTS:-60}"
 REDIS_READY_DELAY="${REDIS_READY_DELAY:-5}"
 
-AUTHENTIK_NAMESPACE="${AUTHENTIK_NAMESPACE:-security}"
-AUTHENTIK_RELEASE="${AUTHENTIK_RELEASE:-authentik}"
-AUTHENTIK_CHART_VERSION="${AUTHENTIK_CHART_VERSION:-2025.12.4}"
-AUTHENTIK_VALUES="${REPO_ROOT}/deploy/authentik/values.yaml"
-AUTHENTIK_MANIFESTS="${REPO_ROOT}/deploy/authentik"
-AUTHENTIK_SERVER_URL="${AUTHENTIK_SERVER_URL:-http://authentik-server.security.svc.cluster.local:9000}"
-AUTHENTIK_OIDC_APP_SLUG="${AUTHENTIK_OIDC_APP_SLUG:-fluxo-caixa}"
-AUTHENTIK_READY_ATTEMPTS="${AUTHENTIK_READY_ATTEMPTS:-90}"
-AUTHENTIK_READY_DELAY="${AUTHENTIK_READY_DELAY:-5}"
+ORY_NAMESPACE="${ORY_NAMESPACE:-security}"
+KRATOS_RELEASE="${KRATOS_RELEASE:-kratos}"
+HYDRA_RELEASE="${HYDRA_RELEASE:-hydra}"
+KRATOS_CHART_VERSION="${KRATOS_CHART_VERSION:-0.58.0}"
+HYDRA_CHART_VERSION="${HYDRA_CHART_VERSION:-0.58.0}"
+KRATOS_VALUES="${REPO_ROOT}/deploy/ory/kratos-values.yaml"
+HYDRA_VALUES="${REPO_ROOT}/deploy/ory/hydra-values.yaml"
+ORY_MANIFESTS="${REPO_ROOT}/deploy/ory"
+HYDRA_PUBLIC_URL="${HYDRA_PUBLIC_URL:-http://hydra-public.security.svc.cluster.local:4444}"
+HYDRA_ADMIN_URL="${HYDRA_ADMIN_URL:-http://hydra-admin.security.svc.cluster.local:4445}"
+KRATOS_PUBLIC_URL="${KRATOS_PUBLIC_URL:-http://kratos-public.security.svc.cluster.local:4433}"
+KRATOS_ADMIN_URL="${KRATOS_ADMIN_URL:-http://kratos-admin.security.svc.cluster.local:4434}"
+ORY_READY_ATTEMPTS="${ORY_READY_ATTEMPTS:-90}"
+ORY_READY_DELAY="${ORY_READY_DELAY:-5}"
 # 360 × 5s = 1800s — matches Job activeDeadlineSeconds (avoid polling a dead Job).
-AUTHENTIK_BOOTSTRAP_ATTEMPTS="${AUTHENTIK_BOOTSTRAP_ATTEMPTS:-360}"
-AUTHENTIK_BOOTSTRAP_DELAY="${AUTHENTIK_BOOTSTRAP_DELAY:-5}"
-# Tuned for first Authentik install (image pull + DB migrations); upgrades are usually faster.
-AUTHENTIK_HELM_TIMEOUT="${AUTHENTIK_HELM_TIMEOUT:-20m}"
-AUTHENTIK_PG_HOST="${AUTHENTIK_PG_HOST:-fluxo-pg-rw.database.svc.cluster.local}"
-AUTHENTIK_PG_NAME="${AUTHENTIK_PG_NAME:-authentik}"
-AUTHENTIK_PG_PORT="${AUTHENTIK_PG_PORT:-5432}"
+ORY_BOOTSTRAP_ATTEMPTS="${ORY_BOOTSTRAP_ATTEMPTS:-360}"
+ORY_BOOTSTRAP_DELAY="${ORY_BOOTSTRAP_DELAY:-5}"
+ORY_HELM_TIMEOUT="${ORY_HELM_TIMEOUT:-15m}"
+ORY_PG_HOST="${ORY_PG_HOST:-fluxo-pg-rw.database.svc.cluster.local}"
+KRATOS_PG_NAME="${KRATOS_PG_NAME:-kratos}"
+HYDRA_PG_NAME="${HYDRA_PG_NAME:-hydra}"
+ORY_PG_PORT="${ORY_PG_PORT:-5432}"
 
 OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
 OBSERVABILITY_MANIFESTS="${REPO_ROOT}/deploy/observability"
@@ -411,12 +416,16 @@ deploy_redis_stack() {
   log_info "Redis ready — standalone cache (256MB allkeys-lru, no persistence)"
 }
 
-authentik_auth_secret_ready() {
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik >/dev/null 2>&1
+ory_pg_secret_ready() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" get secret fluxo-ory-pg >/dev/null 2>&1
 }
 
-authentik_pg_secret_ready() {
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik-pg >/dev/null 2>&1
+kratos_secret_ready() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" get secret fluxo-kratos >/dev/null 2>&1
+}
+
+hydra_secret_ready() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" get secret fluxo-hydra >/dev/null 2>&1
 }
 
 read_fluxo_pg_app_credentials() {
@@ -426,241 +435,214 @@ read_fluxo_pg_app_credentials() {
     -o jsonpath='{.data.password}' | base64 -d)"
 }
 
-ensure_authentik_pg_secret() {
+ory_postgres_dsn() {
+  local db_name="$1"
+  printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' \
+    "${FLUXO_PG_APP_USER}" "${FLUXO_PG_APP_PASSWORD}" "${ORY_PG_HOST}" "${ORY_PG_PORT}" "${db_name}"
+}
+
+ensure_ory_pg_secret() {
   log_info "waiting for CNPG app secret fluxo-pg-app in ${POSTGRES_NAMESPACE}..."
   retry "${POSTGRES_READY_ATTEMPTS}" "${POSTGRES_READY_DELAY}" fluxo_pg_app_secret_ready
   read_fluxo_pg_app_credentials
 
-  if authentik_pg_secret_ready; then
-    log_info "secret exists: fluxo-authentik-pg (${AUTHENTIK_NAMESPACE})"
+  if ory_pg_secret_ready; then
+    log_info "secret exists: fluxo-ory-pg (${ORY_NAMESPACE})"
     return 0
   fi
 
-  log_info "creating secret fluxo-authentik-pg in ${AUTHENTIK_NAMESPACE}"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" create secret generic fluxo-authentik-pg \
+  log_info "creating secret fluxo-ory-pg in ${ORY_NAMESPACE}"
+  kubectl_cmd -n "${ORY_NAMESPACE}" create secret generic fluxo-ory-pg \
     --from-literal=username="${FLUXO_PG_APP_USER}" \
     --from-literal=password="${FLUXO_PG_APP_PASSWORD}"
 }
 
-authentik_secret_has_postgres_config() {
-  local raw host name user password port
-  raw="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__HOST},{.data.AUTHENTIK_POSTGRESQL__NAME},{.data.AUTHENTIK_POSTGRESQL__USER},{.data.AUTHENTIK_POSTGRESQL__PASSWORD},{.data.AUTHENTIK_POSTGRESQL__PORT}' 2>/dev/null || true)"
-  IFS=',' read -r host name user password port <<< "${raw}"
-  host="$(printf '%s' "${host}" | base64 -d 2>/dev/null || true)"
-  name="$(printf '%s' "${name}" | base64 -d 2>/dev/null || true)"
-  user="$(printf '%s' "${user}" | base64 -d 2>/dev/null || true)"
-  password="$(printf '%s' "${password}" | base64 -d 2>/dev/null || true)"
-  port="$(printf '%s' "${port}" | base64 -d 2>/dev/null || true)"
-  [[ -n "${host}" && -n "${name}" && -n "${user}" && -n "${password}" && -n "${port}" ]]
-}
-
-patch_authentik_postgres_secret_keys() {
-  local encoded_host encoded_name encoded_user encoded_password encoded_port
-  encoded_host="$(printf '%s' "${AUTHENTIK_PG_HOST}" | base64 -w 0 2>/dev/null || printf '%s' "${AUTHENTIK_PG_HOST}" | base64)"
-  encoded_name="$(printf '%s' "${AUTHENTIK_PG_NAME}" | base64 -w 0 2>/dev/null || printf '%s' "${AUTHENTIK_PG_NAME}" | base64)"
-  encoded_user="$(printf '%s' "file:///pg-creds/username" | base64 -w 0 2>/dev/null || printf '%s' "file:///pg-creds/username" | base64)"
-  encoded_password="$(printf '%s' "file:///pg-creds/password" | base64 -w 0 2>/dev/null || printf '%s' "file:///pg-creds/password" | base64)"
-  encoded_port="$(printf '%s' "${AUTHENTIK_PG_PORT}" | base64 -w 0 2>/dev/null || printf '%s' "${AUTHENTIK_PG_PORT}" | base64)"
-
-  log_info "patching fluxo-authentik with CNPG PostgreSQL env (existingSecret mode ignores values.yaml authentik.postgresql)"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" patch secret fluxo-authentik --type merge \
-    -p "{\"data\":{\"AUTHENTIK_POSTGRESQL__HOST\":\"${encoded_host}\",\"AUTHENTIK_POSTGRESQL__NAME\":\"${encoded_name}\",\"AUTHENTIK_POSTGRESQL__USER\":\"${encoded_user}\",\"AUTHENTIK_POSTGRESQL__PASSWORD\":\"${encoded_password}\",\"AUTHENTIK_POSTGRESQL__PORT\":\"${encoded_port}\"}}"
-}
-
-ensure_authentik_auth_secret() {
-  if authentik_auth_secret_ready; then
-    log_info "secret exists: fluxo-authentik (${AUTHENTIK_NAMESPACE})"
-    if authentik_secret_has_postgres_config; then
-      return 0
-    fi
-    patch_authentik_postgres_secret_keys
+ensure_kratos_secret() {
+  local dsn secrets_default secrets_cookie
+  if kratos_secret_ready; then
+    log_info "secret exists: fluxo-kratos (${ORY_NAMESPACE})"
     return 0
   fi
 
-  local secret_key bootstrap_password bootstrap_token
-  secret_key="${AUTHENTIK_SECRET_KEY:-$(openssl rand -base64 48)}"
-  bootstrap_password="${AUTHENTIK_BOOTSTRAP_PASSWORD:-$(openssl rand -base64 24)}"
-  bootstrap_token="${AUTHENTIK_BOOTSTRAP_TOKEN:-$(openssl rand -hex 32)}"
+  dsn="$(ory_postgres_dsn "${KRATOS_PG_NAME}")"
+  secrets_default="${KRATOS_SECRETS_DEFAULT:-$(openssl rand -base64 32),$(openssl rand -base64 32)}"
+  secrets_cookie="${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}"
 
-  log_info "creating secret fluxo-authentik in ${AUTHENTIK_NAMESPACE}"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" create secret generic fluxo-authentik \
-    --from-literal=AUTHENTIK_SECRET_KEY="${secret_key}" \
-    --from-literal=AUTHENTIK_BOOTSTRAP_PASSWORD="${bootstrap_password}" \
-    --from-literal=AUTHENTIK_BOOTSTRAP_TOKEN="${bootstrap_token}" \
-    --from-literal=AUTHENTIK_POSTGRESQL__HOST="${AUTHENTIK_PG_HOST}" \
-    --from-literal=AUTHENTIK_POSTGRESQL__NAME="${AUTHENTIK_PG_NAME}" \
-    --from-literal=AUTHENTIK_POSTGRESQL__USER="file:///pg-creds/username" \
-    --from-literal=AUTHENTIK_POSTGRESQL__PASSWORD="file:///pg-creds/password" \
-    --from-literal=AUTHENTIK_POSTGRESQL__PORT="${AUTHENTIK_PG_PORT}"
+  log_info "creating secret fluxo-kratos in ${ORY_NAMESPACE}"
+  kubectl_cmd -n "${ORY_NAMESPACE}" create secret generic fluxo-kratos \
+    --from-literal=dsn="${dsn}" \
+    --from-literal=secretsDefault="${secrets_default}" \
+    --from-literal=secretsCookie="${secrets_cookie}"
 }
 
-log_authentik_helm_progress() {
-  local interval="${AUTHENTIK_HELM_PROGRESS_INTERVAL:-30}"
-  while sleep "${interval}"; do
-    kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-      -l "app.kubernetes.io/name=authentik,app.kubernetes.io/instance=${AUTHENTIK_RELEASE}" \
-      --no-headers 2>/dev/null || true
-  done
+ensure_hydra_secret() {
+  local dsn secrets_system
+  if hydra_secret_ready; then
+    log_info "secret exists: fluxo-hydra (${ORY_NAMESPACE})"
+    return 0
+  fi
+
+  dsn="$(ory_postgres_dsn "${HYDRA_PG_NAME}")"
+  secrets_system="${HYDRA_SECRETS_SYSTEM:-$(openssl rand -base64 32)}"
+
+  log_info "creating secret fluxo-hydra in ${ORY_NAMESPACE}"
+  kubectl_cmd -n "${ORY_NAMESPACE}" create secret generic fluxo-hydra \
+    --from-literal=dsn="${dsn}" \
+    --from-literal=secretsSystem="${secrets_system}"
 }
 
-authentik_server_pods_ready() {
+token_hook_pods_ready() {
   local ready total
-  ready="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-    -l "app.kubernetes.io/name=authentik,app.kubernetes.io/component=server,app.kubernetes.io/instance=${AUTHENTIK_RELEASE}" \
+  ready="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=ory-token-hook" \
     -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
     | grep -c '^True$' || true)"
-  total="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-    -l "app.kubernetes.io/name=authentik,app.kubernetes.io/component=server,app.kubernetes.io/instance=${AUTHENTIK_RELEASE}" \
+  total="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=ory-token-hook" \
     --no-headers 2>/dev/null | wc -l | tr -d ' ')"
   [[ "${total}" -ge 1 && "${ready}" -ge "${total}" ]]
 }
 
-authentik_health_ready() {
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod authentik-health-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run authentik-health-check --rm -i --restart=Never \
+token_hook_health_ok() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod ory-token-hook-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run ory-token-hook-check --rm -i --restart=Never \
     --image=curlimages/curl:8.12.1 \
-    --command -- curl -sf "${AUTHENTIK_SERVER_URL}/-/health/ready/" >/dev/null 2>&1
+    --command -- curl -sf "http://ory-token-hook.${ORY_NAMESPACE}.svc.cluster.local:8080/health" >/dev/null 2>&1
 }
 
-wait_for_authentik() {
-  log_info "waiting for Authentik server pods in ${AUTHENTIK_NAMESPACE}..."
-  retry "${AUTHENTIK_READY_ATTEMPTS}" "${AUTHENTIK_READY_DELAY}" authentik_server_pods_ready
-  log_info "waiting for Authentik /-/health/ready/..."
-  retry "${AUTHENTIK_READY_ATTEMPTS}" "${AUTHENTIK_READY_DELAY}" authentik_health_ready
-  log_info "Authentik is ready"
-}
-
-deploy_authentik_helm() {
-  ensure_helm
-  ensure_namespace "${AUTHENTIK_NAMESPACE}"
-
-  if [[ ! -f "${AUTHENTIK_VALUES}" ]]; then
-    log_error "Authentik values not found: ${AUTHENTIK_VALUES}"
+deploy_token_hook() {
+  if [[ ! -f "${ORY_MANIFESTS}/token-hook.yaml" ]]; then
+    log_error "Ory token hook manifest not found: ${ORY_MANIFESTS}/token-hook.yaml"
     exit 1
   fi
 
-  ensure_authentik_pg_secret
-  ensure_authentik_auth_secret
-
-  log_info "helm upgrade --install ${AUTHENTIK_RELEASE} authentik/authentik (chart ${AUTHENTIK_CHART_VERSION}, timeout ${AUTHENTIK_HELM_TIMEOUT})"
-  log_info "Authentik first install: image pull + DB migrations can take several minutes; pod status logged every ${AUTHENTIK_HELM_PROGRESS_INTERVAL:-30}s"
-  helm repo add authentik https://charts.goauthentik.io >/dev/null 2>&1 || true
-  helm repo update authentik >/dev/null
-
-  local progress_pid=""
-  cleanup_authentik_helm_progress() {
-    if [[ -n "${progress_pid}" ]]; then
-      kill "${progress_pid}" 2>/dev/null || true
-      wait "${progress_pid}" 2>/dev/null || true
-      progress_pid=""
-    fi
-  }
-  trap cleanup_authentik_helm_progress EXIT
-
-  log_authentik_helm_progress &
-  progress_pid=$!
-
-  if ! helm upgrade --install "${AUTHENTIK_RELEASE}" authentik/authentik \
-    --namespace "${AUTHENTIK_NAMESPACE}" \
-    --version "${AUTHENTIK_CHART_VERSION}" \
-    --values "${AUTHENTIK_VALUES}" \
-    --wait \
-    --timeout "${AUTHENTIK_HELM_TIMEOUT}"; then
-    cleanup_authentik_helm_progress
-    trap - EXIT
-    log_error "Authentik Helm release failed — inspect: kubectl -n ${AUTHENTIK_NAMESPACE} get pods,logs deploy/authentik-server"
-    return 1
-  fi
-
-  cleanup_authentik_helm_progress
-  trap - EXIT
-
-  wait_for_authentik
+  log_info "applying Ory token hook from ${ORY_MANIFESTS}/token-hook.yaml"
+  kubectl_cmd apply -f "${ORY_MANIFESTS}/token-hook.yaml" -n "${ORY_NAMESPACE}"
+  log_info "waiting for ory-token-hook in ${ORY_NAMESPACE}..."
+  retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" token_hook_pods_ready
+  retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" token_hook_health_ok
+  log_info "ory-token-hook is ready"
 }
 
-authentik_bootstrap_token_valid() {
-  local token
-  token="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_BOOTSTRAP_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  [[ -n "${token}" ]] || return 1
+kratos_pods_ready() {
+  local ready total
+  ready="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=kratos,app.kubernetes.io/instance=${KRATOS_RELEASE}" \
+    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
+    | grep -c '^True$' || true)"
+  total="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=kratos,app.kubernetes.io/instance=${KRATOS_RELEASE}" \
+    --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "${total}" -ge 1 && "${ready}" -ge "${total}" ]]
+}
 
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod authentik-token-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run authentik-token-check --rm -i --restart=Never \
+hydra_pods_ready() {
+  local ready total
+  ready="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=hydra,app.kubernetes.io/instance=${HYDRA_RELEASE}" \
+    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
+    | grep -c '^True$' || true)"
+  total="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=hydra,app.kubernetes.io/instance=${HYDRA_RELEASE}" \
+    --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "${total}" -ge 1 && "${ready}" -ge "${total}" ]]
+}
+
+kratos_health_ready() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod kratos-health-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run kratos-health-check --rm -i --restart=Never \
     --image=curlimages/curl:8.12.1 \
-    --command -- curl -sf -H "Authorization: Bearer ${token}" \
-    "${AUTHENTIK_SERVER_URL}/api/v3/core/users/me/" >/dev/null 2>&1
+    --command -- curl -sf "${KRATOS_ADMIN_URL}/health/ready" >/dev/null 2>&1
 }
 
-authentik_server_pod() {
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-    -l "app.kubernetes.io/name=authentik,app.kubernetes.io/component=server,app.kubernetes.io/instance=${AUTHENTIK_RELEASE}" \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+hydra_health_ready() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod hydra-health-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run hydra-health-check --rm -i --restart=Never \
+    --image=curlimages/curl:8.12.1 \
+    --command -- curl -sf "${HYDRA_ADMIN_URL}/health/ready" >/dev/null 2>&1
 }
 
-ensure_authentik_bootstrap_token() {
-  if authentik_bootstrap_token_valid; then
-    log_info "Authentik bootstrap API token is valid"
-    return 0
+wait_for_ory_idp() {
+  log_info "waiting for Ory Kratos pods in ${ORY_NAMESPACE}..."
+  retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" kratos_pods_ready
+  log_info "waiting for Ory Hydra pods in ${ORY_NAMESPACE}..."
+  retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" hydra_pods_ready
+  log_info "waiting for Kratos /health/ready..."
+  retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" kratos_health_ready
+  log_info "waiting for Hydra /health/ready..."
+  retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" hydra_health_ready
+  log_info "Ory Kratos + Hydra are ready"
+}
+
+deploy_ory_helm() {
+  ensure_helm
+  ensure_namespace "${ORY_NAMESPACE}"
+
+  if [[ ! -f "${KRATOS_VALUES}" ]] || [[ ! -f "${HYDRA_VALUES}" ]]; then
+    log_error "Ory values not found under ${ORY_MANIFESTS}"
+    exit 1
   fi
 
-  local pod token encoded_token
-  pod="$(authentik_server_pod)"
-  if [[ -z "${pod}" ]]; then
-    log_error "Authentik server pod not found in ${AUTHENTIK_NAMESPACE}"
+  ensure_ory_pg_secret
+  ensure_kratos_secret
+  ensure_hydra_secret
+  deploy_token_hook
+
+  log_info "helm upgrade --install ${KRATOS_RELEASE} ory/kratos (chart ${KRATOS_CHART_VERSION}, timeout ${ORY_HELM_TIMEOUT})"
+  helm repo add ory https://k8s.ory.sh/helm/charts >/dev/null 2>&1 || true
+  helm repo update ory >/dev/null
+
+  if ! helm upgrade --install "${KRATOS_RELEASE}" ory/kratos \
+    --namespace "${ORY_NAMESPACE}" \
+    --version "${KRATOS_CHART_VERSION}" \
+    --values "${KRATOS_VALUES}" \
+    --wait \
+    --timeout "${ORY_HELM_TIMEOUT}"; then
+    log_error "Kratos Helm release failed — inspect: kubectl -n ${ORY_NAMESPACE} get pods -l app.kubernetes.io/name=kratos"
     return 1
   fi
 
-  log_info "creating Authentik bootstrap API token via ak shell in ${pod}"
-  token="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" exec "${pod}" -- ak shell -c "
-from authentik.core.models import Token, User
-user = User.objects.filter(username='akadmin').first()
-if user is None:
-    raise SystemExit('akadmin user not found')
-api_token, _ = Token.objects.get_or_create(
-    identifier='fluxo-bootstrap',
-    defaults={'user': user, 'intent': Token.INTENT_API},
-)
-print(api_token.key)
-" 2>/dev/null | tail -n 1)"
-  [[ -n "${token}" ]] || {
-    log_error "failed to create Authentik bootstrap API token"
+  log_info "helm upgrade --install ${HYDRA_RELEASE} ory/hydra (chart ${HYDRA_CHART_VERSION}, timeout ${ORY_HELM_TIMEOUT})"
+  if ! helm upgrade --install "${HYDRA_RELEASE}" ory/hydra \
+    --namespace "${ORY_NAMESPACE}" \
+    --version "${HYDRA_CHART_VERSION}" \
+    --values "${HYDRA_VALUES}" \
+    --wait \
+    --timeout "${ORY_HELM_TIMEOUT}"; then
+    log_error "Hydra Helm release failed — inspect: kubectl -n ${ORY_NAMESPACE} get pods -l app.kubernetes.io/name=hydra"
     return 1
-  }
+  fi
 
-  encoded_token="$(printf '%s' "${token}" | base64 -w 0 2>/dev/null || printf '%s' "${token}" | base64)"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" patch secret fluxo-authentik --type merge \
-    -p "{\"data\":{\"AUTHENTIK_BOOTSTRAP_TOKEN\":\"${encoded_token}\"}}"
-  log_info "patched fluxo-authentik with bootstrap API token"
+  wait_for_ory_idp
 }
 
-authentik_bootstrap_job_complete() {
+ory_bootstrap_job_complete() {
   local status
-  status="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get job authentik-bootstrap \
+  status="$(kubectl_cmd -n "${ORY_NAMESPACE}" get job ory-bootstrap \
     -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
   [[ "${status}" == "True" ]]
 }
 
-authentik_bootstrap_job_failed() {
+ory_bootstrap_job_failed() {
   local status
-  status="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get job authentik-bootstrap \
+  status="$(kubectl_cmd -n "${ORY_NAMESPACE}" get job ory-bootstrap \
     -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
   [[ "${status}" == "True" ]]
 }
 
-authentik_bootstrap_pod_failed() {
+ory_bootstrap_pod_failed() {
   local pod phase reason exit_code
-  pod="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-    -l "job-name=authentik-bootstrap" \
+  pod="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "job-name=ory-bootstrap" \
     --sort-by=.metadata.creationTimestamp \
     -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)"
   [[ -z "${pod}" ]] && return 1
 
-  phase="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pod "${pod}" \
+  phase="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pod "${pod}" \
     -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   [[ "${phase}" == "Failed" ]] && return 0
 
-  reason="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pod "${pod}" \
+  reason="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pod "${pod}" \
     -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)"
   case "${reason}" in
     CrashLoopBackOff|ImagePullBackOff|ErrImagePull|CreateContainerConfigError)
@@ -668,95 +650,93 @@ authentik_bootstrap_pod_failed() {
       ;;
   esac
 
-  exit_code="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pod "${pod}" \
+  exit_code="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pod "${pod}" \
     -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)"
   [[ -n "${exit_code}" && "${exit_code}" != "0" ]]
 }
 
-log_authentik_bootstrap_job_failure() {
+log_ory_bootstrap_job_failure() {
   local pod status
-  status="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get job authentik-bootstrap \
+  status="$(kubectl_cmd -n "${ORY_NAMESPACE}" get job ory-bootstrap \
     -o jsonpath='{.status.conditions[?(@.type=="Failed")].message}' 2>/dev/null || true)"
-  pod="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-    -l "job-name=authentik-bootstrap" \
+  pod="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "job-name=ory-bootstrap" \
     --sort-by=.metadata.creationTimestamp \
     -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)"
-  log_error "Job/authentik-bootstrap did not complete in ${AUTHENTIK_NAMESPACE}"
+  log_error "Job/ory-bootstrap did not complete in ${ORY_NAMESPACE}"
   [[ -n "${status}" ]] && log_error "job status: ${status}"
   if [[ -n "${pod}" ]]; then
     log_error "latest pod logs (${pod}):"
-    kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" logs "${pod}" --tail=80 2>/dev/null || true
+    kubectl_cmd -n "${ORY_NAMESPACE}" logs "${pod}" --tail=80 2>/dev/null || true
   fi
 }
 
-wait_for_authentik_bootstrap() {
+wait_for_ory_bootstrap() {
   local i=1
-  log_info "waiting for Job/authentik-bootstrap in ${AUTHENTIK_NAMESPACE}..."
-  while (( i <= AUTHENTIK_BOOTSTRAP_ATTEMPTS )); do
-    if authentik_bootstrap_job_complete; then
-      log_info "authentik-bootstrap job completed"
+  log_info "waiting for Job/ory-bootstrap in ${ORY_NAMESPACE}..."
+  while (( i <= ORY_BOOTSTRAP_ATTEMPTS )); do
+    if ory_bootstrap_job_complete; then
+      log_info "ory-bootstrap job completed"
       return 0
     fi
-    if authentik_bootstrap_job_failed || authentik_bootstrap_pod_failed; then
-      log_error "Job/authentik-bootstrap failed (not waiting for timeout — inspect pod logs)"
-      log_authentik_bootstrap_job_failure
+    if ory_bootstrap_job_failed || ory_bootstrap_pod_failed; then
+      log_error "Job/ory-bootstrap failed (not waiting for timeout — inspect pod logs)"
+      log_ory_bootstrap_job_failure
       return 1
     fi
-    if (( i >= AUTHENTIK_BOOTSTRAP_ATTEMPTS )); then
+    if (( i >= ORY_BOOTSTRAP_ATTEMPTS )); then
       break
     fi
-    log_warn "Attempt ${i}/${AUTHENTIK_BOOTSTRAP_ATTEMPTS} failed; retrying in ${AUTHENTIK_BOOTSTRAP_DELAY}s..."
-    sleep "${AUTHENTIK_BOOTSTRAP_DELAY}"
+    log_warn "Attempt ${i}/${ORY_BOOTSTRAP_ATTEMPTS} failed; retrying in ${ORY_BOOTSTRAP_DELAY}s..."
+    sleep "${ORY_BOOTSTRAP_DELAY}"
     i=$((i + 1))
   done
-  log_authentik_bootstrap_job_failure
+  log_ory_bootstrap_job_failure
   return 1
 }
 
-run_authentik_bootstrap() {
-  if [[ ! -d "${AUTHENTIK_MANIFESTS}" ]]; then
-    log_error "Authentik bootstrap manifests not found: ${AUTHENTIK_MANIFESTS}"
+run_ory_bootstrap() {
+  if [[ ! -d "${ORY_MANIFESTS}" ]]; then
+    log_error "Ory bootstrap manifests not found: ${ORY_MANIFESTS}"
     exit 1
   fi
 
-  ensure_authentik_bootstrap_token
-
-  log_info "applying authentik-bootstrap manifests from ${AUTHENTIK_MANIFESTS}"
-  kubectl_cmd delete job authentik-bootstrap -n "${AUTHENTIK_NAMESPACE}" --ignore-not-found
-  kubectl_cmd delete configmap authentik-bootstrap -n "${AUTHENTIK_NAMESPACE}" --ignore-not-found
-  kubectl_apply_k "${AUTHENTIK_MANIFESTS}"
-  wait_for_authentik_bootstrap
+  log_info "applying ory-bootstrap manifests from ${ORY_MANIFESTS}"
+  kubectl_cmd delete job ory-bootstrap -n "${ORY_NAMESPACE}" --ignore-not-found
+  kubectl_cmd delete configmap ory-bootstrap -n "${ORY_NAMESPACE}" --ignore-not-found
+  kubectl_apply_k "${ORY_MANIFESTS}"
+  wait_for_ory_bootstrap
 }
 
-authentik_oidc_discovery_url() {
-  echo "${AUTHENTIK_SERVER_URL}/application/o/${AUTHENTIK_OIDC_APP_SLUG}/.well-known/openid-configuration"
+ory_oidc_discovery_url() {
+  echo "${HYDRA_PUBLIC_URL}/.well-known/openid-configuration"
 }
 
-authentik_oidc_discovery_ok() {
+ory_oidc_discovery_ok() {
   local url
-  url="$(authentik_oidc_discovery_url)"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod authentik-oidc-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run authentik-oidc-check --rm -i --restart=Never \
+  url="$(ory_oidc_discovery_url)"
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod ory-oidc-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run ory-oidc-check --rm -i --restart=Never \
     --image=curlimages/curl:8.12.1 \
     --command -- curl -sf "${url}" | grep -q '"issuer"' >/dev/null 2>&1
 }
 
-wait_for_authentik_oidc() {
+wait_for_ory_oidc() {
   local url
-  url="$(authentik_oidc_discovery_url)"
-  log_info "waiting for Authentik OIDC discovery at ${url}..."
-  if ! retry "${AUTHENTIK_READY_ATTEMPTS}" "${AUTHENTIK_READY_DELAY}" authentik_oidc_discovery_ok; then
-    log_error "Authentik OIDC discovery unreachable at ${url} (application ${AUTHENTIK_OIDC_APP_SLUG})"
+  url="$(ory_oidc_discovery_url)"
+  log_info "waiting for Ory Hydra OIDC discovery at ${url}..."
+  if ! retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" ory_oidc_discovery_ok; then
+    log_error "Ory Hydra OIDC discovery unreachable at ${url}"
     return 1
   fi
-  log_info "Authentik OIDC discovery OK — issuer present for ${AUTHENTIK_OIDC_APP_SLUG}"
+  log_info "Ory Hydra OIDC discovery OK — issuer present"
 }
 
-deploy_authentik_stack() {
-  deploy_authentik_helm
-  run_authentik_bootstrap
-  wait_for_authentik_oidc
-  log_info "Authentik ready — application ${AUTHENTIK_OIDC_APP_SLUG} OIDC configured (CNPG DB authentik on ${POSTGRES_CLUSTER})"
+deploy_ory_stack() {
+  deploy_ory_helm
+  run_ory_bootstrap
+  wait_for_ory_oidc
+  log_info "Ory Kratos + Hydra ready — OIDC configured (CNPG DBs kratos/hydra on ${POSTGRES_CLUSTER})"
 }
 
 fluxo_pg_app_secret_ready() {
@@ -823,7 +803,7 @@ deploy_krakend_stack() {
   apply_krakend_manifests
   wait_for_krakend_pods
   wait_for_krakend_health
-  log_info "KrakenD ready — NodePort 30443, GET /__health OK (JWT JWKS Authentik OIDC, routes stubbed)"
+  log_info "KrakenD ready — NodePort 30443, GET /__health OK (JWT JWKS Ory Hydra OIDC, routes stubbed)"
 }
 
 observability_workloads_ready() {
@@ -1008,7 +988,7 @@ main() {
   deploy_nats_stack
   deploy_postgres_stack
   deploy_redis_stack
-  deploy_authentik_stack
+  deploy_ory_stack
   deploy_krakend_stack
   deploy_observability_stack
   log_info "deploy-platform.sh — complete"

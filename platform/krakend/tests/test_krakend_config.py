@@ -15,12 +15,10 @@ POST_SCHEMA = ROOT / "schemas" / "post-lancamento.request.json"
 
 LANCAMENTOS_HOST = "http://svc-lancamentos.fluxo-caixa.svc.cluster.local:8000"
 CONSULTA_HOST = "http://svc-consulta.fluxo-caixa.svc.cluster.local:8000"
-AUTHENTIK_JWKS_URL = (
-    "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/jwks/"
+HYDRA_JWKS_URL = (
+    "http://hydra-public.security.svc.cluster.local:4444/.well-known/jwks.json"
 )
-AUTHENTIK_ISSUER = (
-    "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/"
-)
+HYDRA_ISSUER = "http://hydra-public.security.svc.cluster.local:4444/"
 
 
 @pytest.fixture
@@ -79,10 +77,11 @@ def test_authenticated_endpoints_require_jwt_and_propagate_claims(config: dict) 
         assert validator["alg"] == "RS256"
         assert validator["cache"] is True
         assert validator["cache_duration"] == 300
-        assert validator["jwk_url"] == AUTHENTIK_JWKS_URL
-        assert validator["issuer"] == AUTHENTIK_ISSUER
+        assert validator["jwk_url"] == HYDRA_JWKS_URL
+        assert validator["issuer"] == HYDRA_ISSUER
         assert "keycloak" not in validator["jwk_url"].lower()
         assert "keycloak" not in validator["issuer"].lower()
+        assert "authentik" not in validator["jwk_url"].lower()
         claims = dict(validator["propagate_claims"])
         assert claims["merchant_id"] == "x-merchant-id"
         assert claims["azp"] == "x-client-id"
