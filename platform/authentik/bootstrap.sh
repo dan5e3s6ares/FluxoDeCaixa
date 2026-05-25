@@ -372,7 +372,9 @@ upsert_oauth2_provider() {
   fi
 
   log "creating OAuth2 provider ${client_id}"
-  if api POST "/api/v3/providers/oauth2/" "${body}" | json_pk; then
+  provider_pk="$(api POST "/api/v3/providers/oauth2/" "${body}" | json_pk || true)"
+  if [ -n "${provider_pk}" ]; then
+    printf '%s' "${provider_pk}"
     return 0
   fi
 
@@ -435,6 +437,11 @@ oauth2_defaults_ready() {
 ensure_application_linked() {
   local provider_pk="$1"
   local app_pk app_body
+
+  if [ -z "${provider_pk}" ]; then
+    log "missing OAuth2 provider pk — cannot link application ${APP_SLUG}"
+    return 1
+  fi
 
   if ! application_exists; then
     log "creating application ${APP_SLUG}"
