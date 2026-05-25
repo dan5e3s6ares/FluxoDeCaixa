@@ -632,9 +632,28 @@ authentik_bootstrap_job_complete() {
   [[ "${status}" == "True" ]]
 }
 
+log_authentik_bootstrap_job_failure() {
+  local pod status
+  status="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get job authentik-bootstrap \
+    -o jsonpath='{.status.conditions[?(@.type=="Failed")].message}' 2>/dev/null || true)"
+  pod="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
+    -l "job-name=authentik-bootstrap" \
+    --sort-by=.metadata.creationTimestamp \
+    -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)"
+  log_error "Job/authentik-bootstrap did not complete in ${AUTHENTIK_NAMESPACE}"
+  [[ -n "${status}" ]] && log_error "job status: ${status}"
+  if [[ -n "${pod}" ]]; then
+    log_error "latest pod logs (${pod}):"
+    kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" logs "${pod}" --tail=80 2>/dev/null || true
+  fi
+}
+
 wait_for_authentik_bootstrap() {
   log_info "waiting for Job/authentik-bootstrap in ${AUTHENTIK_NAMESPACE}..."
-  retry "${AUTHENTIK_BOOTSTRAP_ATTEMPTS}" "${AUTHENTIK_BOOTSTRAP_DELAY}" authentik_bootstrap_job_complete
+  if ! retry "${AUTHENTIK_BOOTSTRAP_ATTEMPTS}" "${AUTHENTIK_BOOTSTRAP_DELAY}" authentik_bootstrap_job_complete; then
+    log_authentik_bootstrap_job_failure
+    return 1
+  fi
   log_info "authentik-bootstrap job completed"
 }
 
