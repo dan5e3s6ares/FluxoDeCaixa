@@ -48,16 +48,6 @@ REDIS_MANIFESTS="${REPO_ROOT}/deploy/redis"
 REDIS_READY_ATTEMPTS="${REDIS_READY_ATTEMPTS:-60}"
 REDIS_READY_DELAY="${REDIS_READY_DELAY:-5}"
 
-KEYCLOAK_NAMESPACE="${KEYCLOAK_NAMESPACE:-security}"
-KEYCLOAK_RELEASE="${KEYCLOAK_RELEASE:-keycloak}"
-KEYCLOAK_CHART_VERSION="${KEYCLOAK_CHART_VERSION:-25.2.0}"
-KEYCLOAK_VALUES="${REPO_ROOT}/deploy/keycloak/values.yaml"
-KEYCLOAK_MANIFESTS="${REPO_ROOT}/deploy/keycloak"
-KEYCLOAK_READY_ATTEMPTS="${KEYCLOAK_READY_ATTEMPTS:-90}"
-KEYCLOAK_READY_DELAY="${KEYCLOAK_READY_DELAY:-5}"
-KEYCLOAK_BOOTSTRAP_ATTEMPTS="${KEYCLOAK_BOOTSTRAP_ATTEMPTS:-90}"
-KEYCLOAK_BOOTSTRAP_DELAY="${KEYCLOAK_BOOTSTRAP_DELAY:-5}"
-
 OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
 OBSERVABILITY_MANIFESTS="${REPO_ROOT}/deploy/observability"
 PROMETHEUS_RELEASE="${PROMETHEUS_RELEASE:-prometheus}"
@@ -417,152 +407,6 @@ wait_for_postgres_secrets() {
   retry "${POSTGRES_READY_ATTEMPTS}" "${POSTGRES_READY_DELAY}" fluxo_pg_superuser_secret_ready
 }
 
-keycloak_auth_secret_ready() {
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get secret fluxo-keycloak >/dev/null 2>&1
-}
-
-keycloak_db_credentials_present() {
-  local user password
-  user="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get secret fluxo-keycloak \
-    -o jsonpath='{.data.db-user}' 2>/dev/null || true)"
-  password="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get secret fluxo-keycloak \
-    -o jsonpath='{.data.db-password}' 2>/dev/null || true)"
-  [[ -n "${user}" && -n "${password}" ]]
-}
-
-read_fluxo_pg_app_credentials() {
-  FLUXO_PG_APP_USER="$(kubectl_cmd -n "${POSTGRES_NAMESPACE}" get secret fluxo-pg-app \
-    -o jsonpath='{.data.username}' | base64 -d)"
-  FLUXO_PG_APP_PASSWORD="$(kubectl_cmd -n "${POSTGRES_NAMESPACE}" get secret fluxo-pg-app \
-    -o jsonpath='{.data.password}' | base64 -d)"
-}
-
-patch_keycloak_db_credentials() {
-  local encoded_user encoded_password
-  encoded_user="$(printf '%s' "${FLUXO_PG_APP_USER}" | base64 -w 0 2>/dev/null || printf '%s' "${FLUXO_PG_APP_USER}" | base64)"
-  encoded_password="$(printf '%s' "${FLUXO_PG_APP_PASSWORD}" | base64 -w 0 2>/dev/null || printf '%s' "${FLUXO_PG_APP_PASSWORD}" | base64)"
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" patch secret fluxo-keycloak --type merge \
-    -p "{\"data\":{\"db-user\":\"${encoded_user}\",\"db-password\":\"${encoded_password}\"}}"
-}
-
-ensure_keycloak_auth_secret() {
-  log_info "waiting for CNPG app secret fluxo-pg-app in ${POSTGRES_NAMESPACE}..."
-  retry "${POSTGRES_READY_ATTEMPTS}" "${POSTGRES_READY_DELAY}" fluxo_pg_app_secret_ready
-  read_fluxo_pg_app_credentials
-
-  if keycloak_auth_secret_ready; then
-    if keycloak_db_credentials_present; then
-      log_info "secret exists: fluxo-keycloak (${KEYCLOAK_NAMESPACE})"
-      return 0
-    fi
-    log_info "patching fluxo-keycloak with CNPG database credentials"
-    patch_keycloak_db_credentials
-    return 0
-  fi
-
-  local admin_password
-  admin_password="${KEYCLOAK_ADMIN_PASSWORD:-$(openssl rand -base64 24)}"
-
-  log_info "creating secret fluxo-keycloak in ${KEYCLOAK_NAMESPACE}"
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" create secret generic fluxo-keycloak \
-    --from-literal=admin-password="${admin_password}" \
-    --from-literal=db-user="${FLUXO_PG_APP_USER}" \
-    --from-literal=db-password="${FLUXO_PG_APP_PASSWORD}"
-}
-
-keycloak_pods_ready() {
-  local ready total
-  ready="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get pods \
-    -l "app.kubernetes.io/name=keycloak,app.kubernetes.io/instance=${KEYCLOAK_RELEASE}" \
-    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
-    | grep -c '^True$' || true)"
-  total="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get pods \
-    -l "app.kubernetes.io/name=keycloak,app.kubernetes.io/instance=${KEYCLOAK_RELEASE}" \
-    --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-  [[ "${total}" -ge 1 && "${ready}" -ge "${total}" ]]
-}
-
-keycloak_health_ready() {
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" delete pod keycloak-health-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" run keycloak-health-check --rm -i --restart=Never \
-    --image=curlimages/curl:8.12.1 \
-    --command -- curl -sf "http://keycloak.${KEYCLOAK_NAMESPACE}.svc.cluster.local:8080/health/ready" >/dev/null 2>&1
-}
-
-wait_for_keycloak() {
-  log_info "waiting for Keycloak pods in ${KEYCLOAK_NAMESPACE}..."
-  retry "${KEYCLOAK_READY_ATTEMPTS}" "${KEYCLOAK_READY_DELAY}" keycloak_pods_ready
-  log_info "waiting for Keycloak /health/ready..."
-  retry "${KEYCLOAK_READY_ATTEMPTS}" "${KEYCLOAK_READY_DELAY}" keycloak_health_ready
-  log_info "Keycloak is ready"
-}
-
-deploy_keycloak_helm() {
-  ensure_helm
-  ensure_namespace "${KEYCLOAK_NAMESPACE}"
-
-  if [[ ! -f "${KEYCLOAK_VALUES}" ]]; then
-    log_error "Keycloak values not found: ${KEYCLOAK_VALUES}"
-    exit 1
-  fi
-
-  ensure_keycloak_auth_secret
-
-  log_info "helm upgrade --install ${KEYCLOAK_RELEASE} bitnami/keycloak (chart ${KEYCLOAK_CHART_VERSION}, --wait=false)"
-  helm repo add bitnami https://charts.bitnami.com/bitnami >/dev/null 2>&1 || true
-  helm repo update bitnami >/dev/null
-
-  # Do not pass --wait: Bitnami readiness on /realms/master can block for 20m with no
-  # log output. wait_for_keycloak below polls /health/ready with visible retries.
-  (
-    while sleep 15; do
-      log_info "helm: applying Keycloak release (no --wait)..."
-    done
-  ) &
-  local keycloak_helm_heartbeat=$!
-  helm upgrade --install "${KEYCLOAK_RELEASE}" bitnami/keycloak \
-    --namespace "${KEYCLOAK_NAMESPACE}" \
-    --version "${KEYCLOAK_CHART_VERSION}" \
-    --values "${KEYCLOAK_VALUES}" \
-    --wait=false
-  kill "${keycloak_helm_heartbeat}" 2>/dev/null || true
-  wait "${keycloak_helm_heartbeat}" 2>/dev/null || true
-  log_info "Keycloak helm release applied; polling pod readiness..."
-
-  wait_for_keycloak
-}
-
-keycloak_bootstrap_job_complete() {
-  local status
-  status="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get job keycloak-bootstrap \
-    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
-  [[ "${status}" == "True" ]]
-}
-
-wait_for_keycloak_bootstrap() {
-  log_info "waiting for Job/keycloak-bootstrap in ${KEYCLOAK_NAMESPACE}..."
-  retry "${KEYCLOAK_BOOTSTRAP_ATTEMPTS}" "${KEYCLOAK_BOOTSTRAP_DELAY}" keycloak_bootstrap_job_complete
-  log_info "keycloak-bootstrap job completed"
-}
-
-run_keycloak_bootstrap() {
-  if [[ ! -d "${KEYCLOAK_MANIFESTS}" ]]; then
-    log_error "Keycloak bootstrap manifests not found: ${KEYCLOAK_MANIFESTS}"
-    exit 1
-  fi
-
-  log_info "applying keycloak-bootstrap manifests from ${KEYCLOAK_MANIFESTS}"
-  kubectl_cmd delete job keycloak-bootstrap -n "${KEYCLOAK_NAMESPACE}" --ignore-not-found
-  kubectl_apply_k "${KEYCLOAK_MANIFESTS}"
-  wait_for_keycloak_bootstrap
-}
-
-deploy_keycloak_stack() {
-  deploy_keycloak_helm
-  run_keycloak_bootstrap
-  log_info "Keycloak ready — realm fluxo-caixa imported (external DB keycloak on fluxo-pg, clients svc-lancamentos, svc-consolidado, svc-consulta, krakend)"
-}
-
 krakend_pods_ready() {
   local ready total
   ready="$(kubectl_cmd -n "${GATEWAY_NAMESPACE}" get pods \
@@ -613,7 +457,7 @@ deploy_krakend_stack() {
   apply_krakend_manifests
   wait_for_krakend_pods
   wait_for_krakend_health
-  log_info "KrakenD ready — NodePort 30443, GET /__health OK (JWT JWKS Keycloak, routes stubbed)"
+  log_info "KrakenD ready — NodePort 30443, GET /__health OK (JWT JWKS OIDC, routes stubbed)"
 }
 
 observability_workloads_ready() {
@@ -798,7 +642,6 @@ main() {
   deploy_nats_stack
   deploy_postgres_stack
   deploy_redis_stack
-  deploy_keycloak_stack
   deploy_krakend_stack
   deploy_observability_stack
   log_info "deploy-platform.sh — complete"

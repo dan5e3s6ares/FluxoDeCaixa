@@ -7,58 +7,46 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 KRAKEND_NODEPORT="${KRAKEND_NODEPORT:-30443}"
 KRAKEND_URL="${KRAKEND_URL:-https://127.0.0.1:${KRAKEND_NODEPORT}}"
-KEYCLOAK_NAMESPACE="${KEYCLOAK_NAMESPACE:-security}"
-KEYCLOAK_URL="${KEYCLOAK_URL:-http://keycloak.${KEYCLOAK_NAMESPACE}.svc.cluster.local:8080}"
-REALM="${KEYCLOAK_REALM:-fluxo-caixa}"
+OIDC_NAMESPACE="${OIDC_NAMESPACE:-security}"
+OIDC_TOKEN_URL="${OIDC_TOKEN_URL:-http://authentik.${OIDC_NAMESPACE}.svc.cluster.local/application/o/token/}"
 E2E_LANCAMENTOS_CLIENT="${E2E_LANCAMENTOS_CLIENT:-svc-lancamentos}"
 E2E_CONSULTA_CLIENT="${E2E_CONSULTA_CLIENT:-svc-consulta}"
-E2E_SECRET_NAME="${E2E_SECRET_NAME:-e2e-kc-material}"
+E2E_SECRET_NAME="${E2E_SECRET_NAME:-e2e-oidc-material}"
 E2E_MERCHANT_ID="${E2E_MERCHANT_ID:-00000000-0000-4000-8000-000000000001}"
 E2E_LANCAMENTO_VALOR="${E2E_LANCAMENTO_VALOR:-10.00}"
 E2E_POLL_MAX_ATTEMPTS="${E2E_POLL_MAX_ATTEMPTS:-90}"
 E2E_POLL_DELAY="${E2E_POLL_DELAY:-2}"
 
 cleanup_e2e_secret() {
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" delete secret "${E2E_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${OIDC_NAMESPACE}" delete secret "${E2E_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1
 }
 
-# Obtain client_credentials token; ensures service-account user carries merchant_id + merchant role.
-obtain_access_token_via_keycloak() {
-  local admin_password="$1"
-  local oidc_client="$2"
+# Obtain client_credentials token via OIDC token endpoint (Authentik stub — filled by follow-up tasks).
+obtain_access_token_via_oidc() {
+  local client_id="$1"
+  local client_secret="$2"
 
   cleanup_e2e_secret
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" delete pod "e2e-kc-${oidc_client}" --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" create secret generic "${E2E_SECRET_NAME}" \
-    --from-literal=admin-password="${admin_password}" >/dev/null
+  kubectl_cmd -n "${OIDC_NAMESPACE}" delete pod "e2e-oidc-${client_id}" --ignore-not-found >/dev/null 2>&1
 
-  kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" run "e2e-kc-${oidc_client}" --rm -i --restart=Never \
+  kubectl_cmd -n "${OIDC_NAMESPACE}" run "e2e-oidc-${client_id}" --rm -i --restart=Never \
     --image=curlimages/curl:8.12.1 \
-    --env="OIDC_CLIENT=${oidc_client}" \
-    --env="MERCHANT_ID=${E2E_MERCHANT_ID}" \
-    --env="KEYCLOAK_URL=${KEYCLOAK_URL}" \
-    --env="REALM=${REALM}" \
-    --overrides="$(cat <<EOF
-{
-  "spec": {
-    "containers": [{
-      "name": "e2e-kc-${oidc_client}",
-      "image": "curlimages/curl:8.12.1",
-      "stdin": true,
-      "stdinOnce": true,
-      "env": [
-        {"name": "KC_ADMIN_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "${E2E_SECRET_NAME}", "key": "admin-password"}}},
-        {"name": "OIDC_CLIENT", "value": "${oidc_client}"},
-        {"name": "MERCHANT_ID", "value": "${E2E_MERCHANT_ID}"},
-        {"name": "KEYCLOAK_URL", "value": "${KEYCLOAK_URL}"},
-        {"name": "REALM", "value": "${REALM}"}
-      ],
-      "command": ["sh", "-ce", "set -euo pipefail\nADMIN_TOKEN=\$(curl -sf -X POST \"\${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token\" -H 'Content-Type: application/x-www-form-urlencoded' -d client_id=admin-cli -d username=admin -d password=\$KC_ADMIN_PASSWORD -d grant_type=password | sed -n 's/.*\\\"access_token\\\":\\\"\\([^\\\"]*\\)\\\".*/\\1/p')\nCLIENT_UUID=\$(curl -sf -H \"Authorization: Bearer \$ADMIN_TOKEN\" \"\${KEYCLOAK_URL}/admin/realms/\${REALM}/clients?clientId=\${OIDC_CLIENT}\" | sed -n 's/.*\\\"id\\\":\\\"\\([^\\\"]*\\)\\\".*/\\1/p' | head -1)\nSA_USER=\$(curl -sf -H \"Authorization: Bearer \$ADMIN_TOKEN\" \"\${KEYCLOAK_URL}/admin/realms/\${REALM}/clients/\${CLIENT_UUID}/service-account-user\" | sed -n 's/.*\\\"id\\\":\\\"\\([^\\\"]*\\)\\\".*/\\1/p' | head -1)\ncurl -sf -X PUT -H \"Authorization: Bearer \$ADMIN_TOKEN\" -H 'Content-Type: application/json' \"\${KEYCLOAK_URL}/admin/realms/\${REALM}/users/\${SA_USER}\" -d '{\"attributes\":{\"merchant_id\":[\"'\"\${MERCHANT_ID}\"'\"]}}' >/dev/null\nROLE_ID=\$(curl -sf -H \"Authorization: Bearer \$ADMIN_TOKEN\" \"\${KEYCLOAK_URL}/admin/realms/\${REALM}/roles/merchant\" | sed -n 's/.*\\\"id\\\":\\\"\\([^\\\"]*\\)\\\".*/\\1/p' | head -1)\ncurl -sf -X POST -H \"Authorization: Bearer \$ADMIN_TOKEN\" -H 'Content-Type: application/json' \"\${KEYCLOAK_URL}/admin/realms/\${REALM}/users/\${SA_USER}/role-mappings/realm\" -d '[{\"id\":\"'\"\${ROLE_ID}\"'\",\"name\":\"merchant\"}]' >/dev/null\nCLIENT_SECRET=\$(curl -sf -H \"Authorization: Bearer \$ADMIN_TOKEN\" \"\${KEYCLOAK_URL}/admin/realms/\${REALM}/clients/\${CLIENT_UUID}/client-secret\" | sed -n 's/.*\\\"value\\\":\\\"\\([^\\\"]*\\)\\\".*/\\1/p')\ncurl -sf -X POST \"\${KEYCLOAK_URL}/realms/\${REALM}/protocol/openid-connect/token\" -H 'Content-Type: application/x-www-form-urlencoded' -d grant_type=client_credentials -d client_id=\${OIDC_CLIENT} -d client_secret=\$CLIENT_SECRET | sed -n 's/.*\\\"access_token\\\":\\\"\\([^\\\"]*\\)\\\".*/\\1/p'"]
-    }]
-  }
+    --env="OIDC_CLIENT_ID=${client_id}" \
+    --env="OIDC_CLIENT_SECRET=${client_secret}" \
+    --env="OIDC_TOKEN_URL=${OIDC_TOKEN_URL}" \
+    --command -- sh -ce \
+    'curl -sf -X POST "${OIDC_TOKEN_URL}" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d grant_type=client_credentials \
+      -d client_id="${OIDC_CLIENT_ID}" \
+      -d client_secret="${OIDC_CLIENT_SECRET}" \
+      | sed -n "s/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p"' 2>/dev/null
 }
-EOF
-)" 2>/dev/null
+
+read_oidc_client_secret() {
+  local client_id="$1"
+  kubectl_cmd -n "${OIDC_NAMESPACE}" get secret "fluxo-oidc-${client_id}" \
+    -o jsonpath='{.data.client-secret}' 2>/dev/null | base64 -d 2>/dev/null || true
 }
 
 new_idempotency_key() {
@@ -138,6 +126,7 @@ poll_consolidado_until_fresh() {
 
 main() {
   local data_competencia lanc_token consulta_token lancamento_id
+  local lanc_secret consulta_secret
 
   log_info "run-e2e.sh — E2E via KrakenD (${KRAKEND_URL})"
   configure_kubeconfig
@@ -153,17 +142,16 @@ main() {
   curl -skf "${KRAKEND_URL}/__health" >/dev/null
   log_info "KrakenD /health and /__health OK"
 
-  log_info "E2E: Keycloak client_credentials (svc-lancamentos + svc-consulta)"
-  local admin_password
-  admin_password="$(kubectl_cmd -n "${KEYCLOAK_NAMESPACE}" get secret fluxo-keycloak \
-    -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  if [[ -z "${admin_password}" ]]; then
-    log_error "fluxo-keycloak secret missing — cannot run authenticated E2E"
+  log_info "E2E: OIDC client_credentials (${E2E_LANCAMENTOS_CLIENT} + ${E2E_CONSULTA_CLIENT})"
+  lanc_secret="$(read_oidc_client_secret "${E2E_LANCAMENTOS_CLIENT}")"
+  consulta_secret="$(read_oidc_client_secret "${E2E_CONSULTA_CLIENT}")"
+  if [[ -z "${lanc_secret}" ]] || [[ -z "${consulta_secret}" ]]; then
+    log_error "OIDC client secrets missing (fluxo-oidc-* in ${OIDC_NAMESPACE}) — deploy Authentik first"
     exit 1
   fi
 
-  lanc_token="$(obtain_access_token_via_keycloak "${admin_password}" "${E2E_LANCAMENTOS_CLIENT}" | tr -d '\n\r')"
-  consulta_token="$(obtain_access_token_via_keycloak "${admin_password}" "${E2E_CONSULTA_CLIENT}" | tr -d '\n\r')"
+  lanc_token="$(obtain_access_token_via_oidc "${E2E_LANCAMENTOS_CLIENT}" "${lanc_secret}" | tr -d '\n\r')"
+  consulta_token="$(obtain_access_token_via_oidc "${E2E_CONSULTA_CLIENT}" "${consulta_secret}" | tr -d '\n\r')"
   if [[ -z "${lanc_token}" ]] || [[ -z "${consulta_token}" ]]; then
     log_error "could not obtain OIDC tokens for ${E2E_LANCAMENTOS_CLIENT} / ${E2E_CONSULTA_CLIENT}"
     exit 1

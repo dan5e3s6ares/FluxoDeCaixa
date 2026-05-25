@@ -1,4 +1,4 @@
-# KrakenD gateway — doc 07 (namespace gateway, NodePort 30443, JWT JWKS Keycloak)
+# KrakenD gateway — doc 07 (namespace gateway, NodePort 30443, JWT JWKS OIDC)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
