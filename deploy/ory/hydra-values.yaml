@@ -2,7 +2,7 @@
 # Chart: https://k8s.ory.sh/helm/charts (ory/hydra)
 #
 # Expected secrets in namespace `security`:
-#   fluxo-hydra — dsn, secretsSystem
+#   fluxo-hydra — dsn (URL-encoded CNPG creds), secretsSystem, secretsCookie
 #   fluxo-hydra-pg — username, password (CNPG app owner; DB `hydra` via pg-bootstrap)
 #
 # Issuer (in-cluster): http://hydra-public.security.svc.cluster.local:4444/

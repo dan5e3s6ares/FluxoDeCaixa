@@ -37,6 +37,10 @@ validate_static_ory_config() {
   log_info "validate: deploy-platform seeds Ory secrets (fluxo-kratos, fluxo-hydra)"
   grep -q 'ensure_kratos_secret' "${REPO_ROOT}/scripts/deploy-platform.sh"
   grep -q 'ensure_hydra_secret' "${REPO_ROOT}/scripts/deploy-platform.sh"
+  grep -q 'urlencode_component' "${REPO_ROOT}/scripts/lib/common.sh"
+  grep -q 'secretsCipher' "${REPO_ROOT}/scripts/deploy-platform.sh"
+  grep -q 'secretsCookie' "${REPO_ROOT}/scripts/deploy-platform.sh"
+  grep -q 'log_ory_helm_progress' "${REPO_ROOT}/scripts/deploy-platform.sh"
 
   log_info "validate: Ory bootstrap uses Hydra admin API and merchant_id metadata"
   grep -q 'ensure_oauth2_client' "${REPO_ROOT}/platform/ory/bootstrap.sh"

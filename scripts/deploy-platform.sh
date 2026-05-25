@@ -65,7 +65,8 @@ ORY_READY_DELAY="${ORY_READY_DELAY:-5}"
 # 360 × 5s = 1800s — matches Job activeDeadlineSeconds (avoid polling a dead Job).
 ORY_BOOTSTRAP_ATTEMPTS="${ORY_BOOTSTRAP_ATTEMPTS:-360}"
 ORY_BOOTSTRAP_DELAY="${ORY_BOOTSTRAP_DELAY:-5}"
-ORY_HELM_TIMEOUT="${ORY_HELM_TIMEOUT:-15m}"
+ORY_HELM_TIMEOUT="${ORY_HELM_TIMEOUT:-20m}"
+ORY_HELM_PROGRESS_INTERVAL="${ORY_HELM_PROGRESS_INTERVAL:-30}"
 ORY_PG_HOST="${ORY_PG_HOST:-fluxo-pg-rw.database.svc.cluster.local}"
 KRATOS_PG_NAME="${KRATOS_PG_NAME:-kratos}"
 HYDRA_PG_NAME="${HYDRA_PG_NAME:-hydra}"
@@ -437,8 +438,36 @@ read_fluxo_pg_app_credentials() {
 
 ory_postgres_dsn() {
   local db_name="$1"
+  local user encoded_user encoded_password
+  user="${FLUXO_PG_APP_USER}"
+  encoded_user="$(urlencode_component "${user}")"
+  encoded_password="$(urlencode_component "${FLUXO_PG_APP_PASSWORD}")"
   printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' \
-    "${FLUXO_PG_APP_USER}" "${FLUXO_PG_APP_PASSWORD}" "${ORY_PG_HOST}" "${ORY_PG_PORT}" "${db_name}"
+    "${encoded_user}" "${encoded_password}" "${ORY_PG_HOST}" "${ORY_PG_PORT}" "${db_name}"
+}
+
+read_ory_secret_literal() {
+  local secret_name="$1"
+  local key="$2"
+  local fallback="$3"
+  local value=""
+  value="$(kubectl_cmd -n "${ORY_NAMESPACE}" get secret "${secret_name}" \
+    -o "jsonpath={.data.${key}}" 2>/dev/null | base64 -d 2>/dev/null || true)"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+  else
+    printf '%s' "${fallback}"
+  fi
+}
+
+apply_ory_secret() {
+  local secret_name="$1"
+  shift
+  log_info "applying secret ${secret_name} in ${ORY_NAMESPACE}"
+  # shellcheck disable=SC2068
+  kubectl_cmd -n "${ORY_NAMESPACE}" create secret generic "${secret_name}" \
+    "$@" \
+    --dry-run=client -o yaml | kubectl_cmd apply -f -
 }
 
 ensure_ory_pg_secret() {
@@ -458,37 +487,47 @@ ensure_ory_pg_secret() {
 }
 
 ensure_kratos_secret() {
-  local dsn secrets_default secrets_cookie
+  local dsn secrets_default secrets_cookie secrets_cipher
+  dsn="$(ory_postgres_dsn "${KRATOS_PG_NAME}")"
+
   if kratos_secret_ready; then
-    log_info "secret exists: fluxo-kratos (${ORY_NAMESPACE})"
-    return 0
+    secrets_default="$(read_ory_secret_literal fluxo-kratos secretsDefault \
+      "${KRATOS_SECRETS_DEFAULT:-$(openssl rand -base64 32),$(openssl rand -base64 32)}")"
+    secrets_cookie="$(read_ory_secret_literal fluxo-kratos secretsCookie \
+      "${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}")"
+    secrets_cipher="$(read_ory_secret_literal fluxo-kratos secretsCipher \
+      "${KRATOS_SECRETS_CIPHER:-$(openssl rand -base64 32)}")"
+  else
+    secrets_default="${KRATOS_SECRETS_DEFAULT:-$(openssl rand -base64 32),$(openssl rand -base64 32)}"
+    secrets_cookie="${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}"
+    secrets_cipher="${KRATOS_SECRETS_CIPHER:-$(openssl rand -base64 32)}"
   fi
 
-  dsn="$(ory_postgres_dsn "${KRATOS_PG_NAME}")"
-  secrets_default="${KRATOS_SECRETS_DEFAULT:-$(openssl rand -base64 32),$(openssl rand -base64 32)}"
-  secrets_cookie="${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}"
-
-  log_info "creating secret fluxo-kratos in ${ORY_NAMESPACE}"
-  kubectl_cmd -n "${ORY_NAMESPACE}" create secret generic fluxo-kratos \
+  apply_ory_secret fluxo-kratos \
     --from-literal=dsn="${dsn}" \
     --from-literal=secretsDefault="${secrets_default}" \
-    --from-literal=secretsCookie="${secrets_cookie}"
+    --from-literal=secretsCookie="${secrets_cookie}" \
+    --from-literal=secretsCipher="${secrets_cipher}"
 }
 
 ensure_hydra_secret() {
-  local dsn secrets_system
+  local dsn secrets_system secrets_cookie
+  dsn="$(ory_postgres_dsn "${HYDRA_PG_NAME}")"
+
   if hydra_secret_ready; then
-    log_info "secret exists: fluxo-hydra (${ORY_NAMESPACE})"
-    return 0
+    secrets_system="$(read_ory_secret_literal fluxo-hydra secretsSystem \
+      "${HYDRA_SECRETS_SYSTEM:-$(openssl rand -base64 32)}")"
+    secrets_cookie="$(read_ory_secret_literal fluxo-hydra secretsCookie \
+      "${HYDRA_SECRETS_COOKIE:-$(openssl rand -base64 32)}")"
+  else
+    secrets_system="${HYDRA_SECRETS_SYSTEM:-$(openssl rand -base64 32)}"
+    secrets_cookie="${HYDRA_SECRETS_COOKIE:-$(openssl rand -base64 32)}"
   fi
 
-  dsn="$(ory_postgres_dsn "${HYDRA_PG_NAME}")"
-  secrets_system="${HYDRA_SECRETS_SYSTEM:-$(openssl rand -base64 32)}"
-
-  log_info "creating secret fluxo-hydra in ${ORY_NAMESPACE}"
-  kubectl_cmd -n "${ORY_NAMESPACE}" create secret generic fluxo-hydra \
+  apply_ory_secret fluxo-hydra \
     --from-literal=dsn="${dsn}" \
-    --from-literal=secretsSystem="${secrets_system}"
+    --from-literal=secretsSystem="${secrets_system}" \
+    --from-literal=secretsCookie="${secrets_cookie}"
 }
 
 token_hook_pods_ready() {
@@ -562,6 +601,23 @@ hydra_health_ready() {
     --command -- curl -sf "${HYDRA_ADMIN_URL}/health/ready" >/dev/null 2>&1
 }
 
+log_ory_helm_progress() {
+  local release="$1"
+  local interval="${ORY_HELM_PROGRESS_INTERVAL}"
+  while sleep "${interval}"; do
+    kubectl_cmd -n "${ORY_NAMESPACE}" get pods,jobs \
+      -l "app.kubernetes.io/instance=${release}" \
+      --no-headers 2>/dev/null || true
+  done
+}
+
+cleanup_ory_helm_progress() {
+  local progress_pid="${1:-}"
+  [[ -z "${progress_pid}" ]] && return 0
+  kill "${progress_pid}" 2>/dev/null || true
+  wait "${progress_pid}" 2>/dev/null || true
+}
+
 wait_for_ory_idp() {
   log_info "waiting for Ory Kratos pods in ${ORY_NAMESPACE}..."
   retry "${ORY_READY_ATTEMPTS}" "${ORY_READY_DELAY}" kratos_pods_ready
@@ -589,8 +645,14 @@ deploy_ory_helm() {
   deploy_token_hook
 
   log_info "helm upgrade --install ${KRATOS_RELEASE} ory/kratos (chart ${KRATOS_CHART_VERSION}, timeout ${ORY_HELM_TIMEOUT})"
+  log_info "Ory first install: image pull + SQL migrations can take several minutes; pod/job status logged every ${ORY_HELM_PROGRESS_INTERVAL}s"
   helm repo add ory https://k8s.ory.sh/helm/charts >/dev/null 2>&1 || true
   helm repo update ory >/dev/null
+
+  local progress_pid=""
+  log_ory_helm_progress "${KRATOS_RELEASE}" &
+  progress_pid=$!
+  trap 'cleanup_ory_helm_progress "${progress_pid}"' EXIT
 
   if ! helm upgrade --install "${KRATOS_RELEASE}" ory/kratos \
     --namespace "${ORY_NAMESPACE}" \
@@ -598,20 +660,34 @@ deploy_ory_helm() {
     --values "${KRATOS_VALUES}" \
     --wait \
     --timeout "${ORY_HELM_TIMEOUT}"; then
-    log_error "Kratos Helm release failed — inspect: kubectl -n ${ORY_NAMESPACE} get pods -l app.kubernetes.io/name=kratos"
+    cleanup_ory_helm_progress "${progress_pid}"
+    trap - EXIT
+    log_error "Kratos Helm release failed — inspect: kubectl -n ${ORY_NAMESPACE} get pods,jobs -l app.kubernetes.io/instance=${KRATOS_RELEASE}"
     return 1
   fi
 
+  cleanup_ory_helm_progress "${progress_pid}"
+  trap - EXIT
+
   log_info "helm upgrade --install ${HYDRA_RELEASE} ory/hydra (chart ${HYDRA_CHART_VERSION}, timeout ${ORY_HELM_TIMEOUT})"
+  log_ory_helm_progress "${HYDRA_RELEASE}" &
+  progress_pid=$!
+  trap 'cleanup_ory_helm_progress "${progress_pid}"' EXIT
+
   if ! helm upgrade --install "${HYDRA_RELEASE}" ory/hydra \
     --namespace "${ORY_NAMESPACE}" \
     --version "${HYDRA_CHART_VERSION}" \
     --values "${HYDRA_VALUES}" \
     --wait \
     --timeout "${ORY_HELM_TIMEOUT}"; then
-    log_error "Hydra Helm release failed — inspect: kubectl -n ${ORY_NAMESPACE} get pods -l app.kubernetes.io/name=hydra"
+    cleanup_ory_helm_progress "${progress_pid}"
+    trap - EXIT
+    log_error "Hydra Helm release failed — inspect: kubectl -n ${ORY_NAMESPACE} get pods,jobs -l app.kubernetes.io/instance=${HYDRA_RELEASE}"
     return 1
   fi
+
+  cleanup_ory_helm_progress "${progress_pid}"
+  trap - EXIT
 
   wait_for_ory_idp
 }

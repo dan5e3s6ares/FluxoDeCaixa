@@ -2,7 +2,7 @@
 # Chart: https://k8s.ory.sh/helm/charts (ory/kratos)
 #
 # Expected secrets in namespace `security`:
-#   fluxo-kratos — dsn, secretsDefault, secretsCookie
+#   fluxo-kratos — dsn (URL-encoded CNPG creds), secretsDefault, secretsCookie, secretsCipher
 #   fluxo-kratos-pg — username, password (CNPG app owner; DB `kratos` via pg-bootstrap)
 #
 # Public API (in-cluster): http://kratos-public.security.svc.cluster.local/
