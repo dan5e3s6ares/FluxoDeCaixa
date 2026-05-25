@@ -30,6 +30,11 @@ validate_static_ory_config() {
   log_info "validate: deploy/ory and platform/ory present"
   [[ -f "${REPO_ROOT}/deploy/ory/kratos-values.yaml" ]]
   [[ -f "${REPO_ROOT}/deploy/ory/hydra-values.yaml" ]]
+  log_info "validate: Kratos external secret — no courier SMTP URI (avoids smtpConnectionURI key)"
+  if grep -q 'connection_uri:' "${REPO_ROOT}/deploy/ory/kratos-values.yaml"; then
+    log_error "kratos-values.yaml must not set courier.smtp.connection_uri with secret.enabled=false"
+    exit 1
+  fi
   [[ -f "${REPO_ROOT}/platform/ory/bootstrap.sh" ]]
   [[ ! -d "${REPO_ROOT}/deploy/authentik" ]]
   [[ ! -d "${REPO_ROOT}/deploy/keycloak" ]]
