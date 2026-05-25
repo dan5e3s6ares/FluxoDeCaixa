@@ -17,8 +17,13 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: bootstrap
-          image: curlimages/curl:8.12.1
-          command: ["/bin/sh", "/scripts/bootstrap.sh"]
+          # curlimages/curl is curl-only (no grep/sed); bootstrap.sh needs a full shell toolchain.
+          image: alpine:3.20.3
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              apk add --no-cache curl >/dev/null
+              exec /bin/sh /scripts/bootstrap.sh
           env:
             - name: AUTHENTIK_URL
               value: http://authentik-server.security.svc.cluster.local:9000
@@ -37,15 +42,15 @@ spec:
               value: "1"
             # AUTHENTIK_WAIT_* only apply when SKIP_READY_WAIT=1 but the one-shot health check fails.
             - name: AUTHENTIK_WAIT_ATTEMPTS
-              value: "90"
+              value: "24"
             - name: AUTHENTIK_WAIT_DELAY
               value: "5"
             - name: OAUTH2_DEFAULTS_WAIT_ATTEMPTS
-              value: "90"
+              value: "24"
             - name: OAUTH2_DEFAULTS_WAIT_DELAY
               value: "5"
             - name: MAPPING_WAIT_ATTEMPTS
-              value: "90"
+              value: "24"
             - name: MAPPING_WAIT_DELAY
               value: "5"
           volumeMounts:
@@ -55,10 +60,10 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 64Mi
+              memory: 96Mi
             limits:
               cpu: 200m
-              memory: 128Mi
+              memory: 192Mi
       volumes:
         - name: scripts
           configMap:

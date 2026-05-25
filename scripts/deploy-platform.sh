@@ -641,6 +641,38 @@ authentik_bootstrap_job_complete() {
   [[ "${status}" == "True" ]]
 }
 
+authentik_bootstrap_job_failed() {
+  local status
+  status="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get job authentik-bootstrap \
+    -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true)"
+  [[ "${status}" == "True" ]]
+}
+
+authentik_bootstrap_pod_failed() {
+  local pod phase reason exit_code
+  pod="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
+    -l "job-name=authentik-bootstrap" \
+    --sort-by=.metadata.creationTimestamp \
+    -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)"
+  [[ -z "${pod}" ]] && return 1
+
+  phase="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pod "${pod}" \
+    -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  [[ "${phase}" == "Failed" ]] && return 0
+
+  reason="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pod "${pod}" \
+    -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || true)"
+  case "${reason}" in
+    CrashLoopBackOff|ImagePullBackOff|ErrImagePull|CreateContainerConfigError)
+      return 0
+      ;;
+  esac
+
+  exit_code="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pod "${pod}" \
+    -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)"
+  [[ -n "${exit_code}" && "${exit_code}" != "0" ]]
+}
+
 log_authentik_bootstrap_job_failure() {
   local pod status
   status="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get job authentik-bootstrap \
@@ -658,12 +690,27 @@ log_authentik_bootstrap_job_failure() {
 }
 
 wait_for_authentik_bootstrap() {
+  local i=1
   log_info "waiting for Job/authentik-bootstrap in ${AUTHENTIK_NAMESPACE}..."
-  if ! retry "${AUTHENTIK_BOOTSTRAP_ATTEMPTS}" "${AUTHENTIK_BOOTSTRAP_DELAY}" authentik_bootstrap_job_complete; then
-    log_authentik_bootstrap_job_failure
-    return 1
-  fi
-  log_info "authentik-bootstrap job completed"
+  while (( i <= AUTHENTIK_BOOTSTRAP_ATTEMPTS )); do
+    if authentik_bootstrap_job_complete; then
+      log_info "authentik-bootstrap job completed"
+      return 0
+    fi
+    if authentik_bootstrap_job_failed || authentik_bootstrap_pod_failed; then
+      log_error "Job/authentik-bootstrap failed (not waiting for timeout — inspect pod logs)"
+      log_authentik_bootstrap_job_failure
+      return 1
+    fi
+    if (( i >= AUTHENTIK_BOOTSTRAP_ATTEMPTS )); then
+      break
+    fi
+    log_warn "Attempt ${i}/${AUTHENTIK_BOOTSTRAP_ATTEMPTS} failed; retrying in ${AUTHENTIK_BOOTSTRAP_DELAY}s..."
+    sleep "${AUTHENTIK_BOOTSTRAP_DELAY}"
+    i=$((i + 1))
+  done
+  log_authentik_bootstrap_job_failure
+  return 1
 }
 
 run_authentik_bootstrap() {

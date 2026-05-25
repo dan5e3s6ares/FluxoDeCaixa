@@ -8,6 +8,7 @@ eval "$(
   sed -n \
     -e '/^json_pk()/,/^}/p' \
     -e '/^json_field_present()/,/^}/p' \
+    -e '/^managed_scope_filter()/,/^}/p' \
     "${SCRIPT_DIR}/bootstrap.sh"
 )"
 
@@ -72,5 +73,7 @@ assert_eq "search fallback body" "7" \
 managed_body='{"results":[{"scope_name": "openid","pk":1,"managed":"goauthentik.io/providers/oauth2/scope-openid"}]}'
 assert_match "managed scope body" "${managed_body}" scope_name openid
 assert_eq "managed scope pk" "1" "$(printf '%s' "${managed_body}" | json_pk)"
+assert_eq "managed_scope_filter openid" "goauthentik.io/providers/oauth2/scope-openid" \
+  "$(managed_scope_filter openid)"
 
 echo "platform/authentik/test-bootstrap-helpers.sh — all tests passed"
