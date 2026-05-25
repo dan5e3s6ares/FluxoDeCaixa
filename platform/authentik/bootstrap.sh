@@ -32,7 +32,8 @@ api() {
 }
 
 json_pk() {
-  sed -n 's/.*"pk":"\([^"]*\)".*/\1/p' | head -n 1
+  # Authentik API returns integer pks ("pk": 42); older sed only matched quoted strings.
+  sed -n 's/.*"pk"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' | head -n 1 | tr -d ' "'
 }
 
 wait_for_authentik() {
@@ -131,7 +132,7 @@ ensure_application_provider() {
   "client_type": "confidential",
   "authorization_flow": "${auth_flow}",
   "invalidation_flow": "${invalid_flow}",
-  "redirect_uris": "",
+  "redirect_uris": [],
   "property_mappings": ${property_mappings},
   "signing_key": "${signing_key}",
   "access_code_validity": "minutes=1",
@@ -193,7 +194,7 @@ ensure_service_clients() {
   "client_type": "confidential",
   "authorization_flow": "${auth_flow}",
   "invalid_flow": "${invalid_flow}",
-  "redirect_uris": "",
+  "redirect_uris": [],
   "property_mappings": ${property_mappings},
   "signing_key": "${signing_key}",
   "access_code_validity": "minutes=1",
