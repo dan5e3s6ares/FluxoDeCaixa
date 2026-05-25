@@ -9,6 +9,7 @@ eval "$(
     -e '/^json_pk()/,/^}/p' \
     -e '/^json_field_present()/,/^}/p' \
     -e '/^json_ref()/,/^}/p' \
+    -e '/^property_mappings_json()/,/^}/p' \
     -e '/^managed_scope_filter()/,/^}/p' \
     -e '/^log()/,/^}/p' \
     "${SCRIPT_DIR}/bootstrap.sh"
@@ -82,6 +83,19 @@ assert_eq "json_ref integer pk" "42" "$(json_ref 42)"
 assert_eq "json_ref uuid pk" '"26edc911-30bd-4ecb-abd8-984b10355e1d"' \
   "$(json_ref 26edc911-30bd-4ecb-abd8-984b10355e1d)"
 assert_eq "json_ref empty" "null" "$(json_ref '')"
+
+assert_eq "property_mappings_json integer pks" "[3,9,7,8]" \
+  "$(property_mappings_json 3 9 7 8)"
+assert_eq "property_mappings_json uuid pk" \
+  '["26edc911-30bd-4ecb-abd8-984b10355e1d",9,7,8]' \
+  "$(property_mappings_json 26edc911-30bd-4ecb-abd8-984b10355e1d 9 7 8)"
+property_mappings="$(property_mappings_json 26edc911-30bd-4ecb-abd8-984b10355e1d 9 7 8)"
+if ! printf '%s' "${property_mappings}" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+  echo "FAIL property_mappings_json: invalid JSON" >&2
+  printf '%s\n' "${property_mappings}" >&2
+  exit 1
+fi
+echo "ok property_mappings_json valid json"
 
 if log_msg="$(log 'stderr-only test' 2>&1 >/dev/null)"; then
   : "log wrote to stderr"
