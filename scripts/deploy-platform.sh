@@ -497,14 +497,19 @@ ensure_kratos_secret() {
     secrets_cookie="$(read_ory_secret_literal fluxo-kratos secretsCookie \
       "${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}")"
     secrets_cipher="$(read_ory_secret_literal fluxo-kratos secretsCipher \
-      "${KRATOS_SECRETS_CIPHER:-$(openssl rand -base64 32)}")"
+      "${KRATOS_SECRETS_CIPHER:-$(ory_kratos_cipher_secret)}")"
     smtp_connection_uri="$(read_ory_secret_literal fluxo-kratos smtpConnectionURI \
       "${KRATOS_SMTP_CONNECTION_URI:-${default_smtp_uri}}")"
   else
     secrets_default="${KRATOS_SECRETS_DEFAULT:-$(openssl rand -base64 32),$(openssl rand -base64 32)}"
     secrets_cookie="${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}"
-    secrets_cipher="${KRATOS_SECRETS_CIPHER:-$(openssl rand -base64 32)}"
+    secrets_cipher="${KRATOS_SECRETS_CIPHER:-$(ory_kratos_cipher_secret)}"
     smtp_connection_uri="${KRATOS_SMTP_CONNECTION_URI:-${default_smtp_uri}}"
+  fi
+
+  if ! ory_kratos_cipher_valid "${secrets_cipher}"; then
+    log_warn "fluxo-kratos secretsCipher length ${#secrets_cipher} > 32 — regenerating (Kratos v1.3+ limit)"
+    secrets_cipher="${KRATOS_SECRETS_CIPHER:-$(ory_kratos_cipher_secret)}"
   fi
 
   apply_ory_secret fluxo-kratos \
