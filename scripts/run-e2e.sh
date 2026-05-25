@@ -76,6 +76,54 @@ EOF
 )" 2>/dev/null
 }
 
+assert_oidc_discovery() {
+  local url="${AUTHENTIK_SERVER_URL}/application/o/${AUTHENTIK_APP_SLUG}/.well-known/openid-configuration"
+
+  log_info "E2E: Authentik OIDC discovery (${AUTHENTIK_APP_SLUG})"
+  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod authentik-oidc-e2e-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run authentik-oidc-e2e-check --rm -i --restart=Never \
+    --image=curlimages/curl:8.12.1 \
+    --command -- curl -sf "${url}" | grep -q '"issuer"' >/dev/null 2>&1 || {
+    log_error "OIDC discovery failed at ${url}"
+    exit 1
+  }
+  log_info "OIDC discovery OK for application ${AUTHENTIK_APP_SLUG}"
+}
+
+assert_krakend_rejects_unauthenticated() {
+  local data http_code body_file
+
+  data="$(date +%Y-%m-%d)"
+  body_file="$(mktemp)"
+  trap 'rm -f "${body_file}"' RETURN
+
+  http_code="$(curl -sk -o "${body_file}" -w '%{http_code}' \
+    "${KRAKEND_URL}/v1/consolidado/${data}")"
+  case "${http_code}" in
+    401|403)
+      log_info "KrakenD rejects unauthenticated GET /v1/consolidado (HTTP ${http_code})"
+      ;;
+    *)
+      log_error "expected 401/403 without JWT on GET /v1/consolidado, got HTTP ${http_code}: $(cat "${body_file}")"
+      exit 1
+      ;;
+  esac
+
+  http_code="$(curl -sk -o "${body_file}" -w '%{http_code}' \
+    -X POST "${KRAKEND_URL}/v1/lancamentos" \
+    -H "Content-Type: application/json" \
+    -d '{"valor":10.00,"tipo":"CREDITO","data_competencia":"'"${data}"'"}')"
+  case "${http_code}" in
+    401|403)
+      log_info "KrakenD rejects unauthenticated POST /v1/lancamentos (HTTP ${http_code})"
+      ;;
+    *)
+      log_error "expected 401/403 without JWT on POST /v1/lancamentos, got HTTP ${http_code}: $(cat "${body_file}")"
+      exit 1
+      ;;
+  esac
+}
+
 assert_token_merchant_id() {
   local access_token="$1"
   local claim
@@ -201,6 +249,9 @@ main() {
   curl -skf "${KRAKEND_URL}/health" >/dev/null
   curl -skf "${KRAKEND_URL}/__health" >/dev/null
   log_info "KrakenD /health and /__health OK"
+
+  assert_oidc_discovery
+  assert_krakend_rejects_unauthenticated
 
   log_info "E2E: Authentik OIDC client_credentials (${E2E_LANCAMENTOS_CLIENT} + ${E2E_CONSULTA_CLIENT}) via application ${AUTHENTIK_APP_SLUG}"
   bootstrap_token="$(read_authentik_bootstrap_token)"
