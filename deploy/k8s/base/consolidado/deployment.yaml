@@ -19,7 +19,8 @@ spec:
     spec:
       containers:
         - name: consolidado
-          image: harbor.local:8080/fluxo-caixa/consolidado:main-0000000
+          image: fluxo-caixa/consolidado:dev
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000

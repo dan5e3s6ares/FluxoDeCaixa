@@ -8,7 +8,6 @@ resources:
   - sealed
 
 patches:
-  - path: patches/image-pull-secrets.yaml
   - path: patches/replicas.yaml
   - path: patches/lancamentos-environment.yaml
   - path: patches/consolidado-environment.yaml

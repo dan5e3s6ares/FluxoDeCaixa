@@ -20,7 +20,8 @@ spec:
     spec:
       containers:
         - name: consulta
-          image: harbor.local:8080/fluxo-caixa/consulta:main-0000000
+          image: fluxo-caixa/consulta:dev
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000
