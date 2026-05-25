@@ -85,6 +85,20 @@ json_ref() {
   esac
 }
 
+property_mappings_json() {
+  # Authentik scope mapping pks may be UUIDs; unquoted values break JSON.parse.
+  local refs="" ref pk
+  for pk in "$@"; do
+    ref="$(json_ref "${pk}")"
+    if [ -n "${refs}" ]; then
+      refs="${refs},${ref}"
+    else
+      refs="${ref}"
+    fi
+  done
+  printf '[%s]' "${refs}"
+}
+
 wait_for_authentik() {
   local attempt=1
   local max="${AUTHENTIK_WAIT_ATTEMPTS:-60}"
@@ -485,7 +499,7 @@ ensure_application_provider() {
   wait_for_merchant_mapping_pk || return 1
   wait_for_oauth2_defaults || return 1
 
-  property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
+  property_mappings="$(property_mappings_json "${openid_pk}" "${email_pk}" "${profile_pk}" "${mapping_pk}")"
   provider_pk="$(upsert_oauth2_provider "${APP_SLUG}" "${APP_SLUG}" "${property_mappings}" \
     "${auth_flow}" "${invalid_flow}" "${signing_key}")"
 
@@ -507,7 +521,7 @@ ensure_service_clients() {
   if ! oauth2_defaults_ready; then
     wait_for_oauth2_defaults || return 1
   fi
-  property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
+  property_mappings="$(property_mappings_json "${openid_pk}" "${email_pk}" "${profile_pk}" "${mapping_pk}")"
 
   IFS=','
   for client_id in ${REQUIRED_CLIENTS}; do
