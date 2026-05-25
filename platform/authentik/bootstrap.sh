@@ -16,19 +16,30 @@ api() {
   local method="$1"
   local path="$2"
   local body="${3:-}"
+  local response http_code
 
   if [ -n "${body}" ]; then
-    curl -sf -X "${method}" \
+    response="$(curl -sS -w '\n%{http_code}' -X "${method}" \
       -H "Authorization: Bearer ${AUTHENTIK_TOKEN}" \
       -H "Content-Type: application/json" \
       "${AUTHENTIK_URL}${path}" \
-      --data "${body}"
+      --data "${body}")"
   else
-    curl -sf -X "${method}" \
+    response="$(curl -sS -w '\n%{http_code}' -X "${method}" \
       -H "Authorization: Bearer ${AUTHENTIK_TOKEN}" \
       -H "Content-Type: application/json" \
-      "${AUTHENTIK_URL}${path}"
+      "${AUTHENTIK_URL}${path}")"
   fi
+
+  http_code="${response##*$'\n'}"
+  response="${response%$'\n'*}"
+  if [ "${http_code}" -ge 200 ] && [ "${http_code}" -lt 300 ]; then
+    printf '%s' "${response}"
+    return 0
+  fi
+
+  log "API ${method} ${path} failed (HTTP ${http_code}): ${response}"
+  return 1
 }
 
 json_pk() {
@@ -196,7 +207,7 @@ oauth2_defaults_ready() {
 }
 
 ensure_application_provider() {
-  local auth_flow invalid_flow signing_key mapping_pk openid_pk email_pk profile_pk
+  # resolve_oauth2_defaults sets globals; do not declare those names local here (shadowing bug).
   local property_mappings provider_pk
 
   if application_exists && jwks_available && mapping_exists; then
@@ -228,7 +239,7 @@ EOF
 }
 
 ensure_service_clients() {
-  local client_id auth_flow invalid_flow signing_key openid_pk email_pk profile_pk mapping_pk
+  local client_id
   local property_mappings
 
   resolve_oauth2_defaults
