@@ -29,10 +29,8 @@ hydra:
     strategies:
       access_token: jwt
     oauth2:
-      token_hook:
-        url: http://ory-token-hook.security.svc.cluster.local:8080/token-hook
-        auth:
-          type: none
+      # Unauthenticated webhook URL (omit auth — Hydra v2.3 only accepts api_key when auth is set).
+      token_hook: http://ory-token-hook.security.svc.cluster.local:8080/token-hook
     secrets: {}
 
 secret:
