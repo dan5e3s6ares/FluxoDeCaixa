@@ -59,6 +59,7 @@ AUTHENTIK_READY_ATTEMPTS="${AUTHENTIK_READY_ATTEMPTS:-90}"
 AUTHENTIK_READY_DELAY="${AUTHENTIK_READY_DELAY:-5}"
 AUTHENTIK_BOOTSTRAP_ATTEMPTS="${AUTHENTIK_BOOTSTRAP_ATTEMPTS:-90}"
 AUTHENTIK_BOOTSTRAP_DELAY="${AUTHENTIK_BOOTSTRAP_DELAY:-5}"
+# Tuned for first Authentik install (image pull + DB migrations); upgrades are usually faster.
 AUTHENTIK_HELM_TIMEOUT="${AUTHENTIK_HELM_TIMEOUT:-20m}"
 AUTHENTIK_PG_HOST="${AUTHENTIK_PG_HOST:-fluxo-pg-rw.database.svc.cluster.local}"
 AUTHENTIK_PG_NAME="${AUTHENTIK_PG_NAME:-authentik}"
@@ -441,17 +442,15 @@ ensure_authentik_pg_secret() {
 }
 
 authentik_secret_has_postgres_config() {
-  local host name user password port
-  host="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__HOST}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  name="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__NAME}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  user="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__USER}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  password="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  port="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__PORT}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  local raw host name user password port
+  raw="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
+    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__HOST},{.data.AUTHENTIK_POSTGRESQL__NAME},{.data.AUTHENTIK_POSTGRESQL__USER},{.data.AUTHENTIK_POSTGRESQL__PASSWORD},{.data.AUTHENTIK_POSTGRESQL__PORT}' 2>/dev/null || true)"
+  IFS=',' read -r host name user password port <<< "${raw}"
+  host="$(printf '%s' "${host}" | base64 -d 2>/dev/null || true)"
+  name="$(printf '%s' "${name}" | base64 -d 2>/dev/null || true)"
+  user="$(printf '%s' "${user}" | base64 -d 2>/dev/null || true)"
+  password="$(printf '%s' "${password}" | base64 -d 2>/dev/null || true)"
+  port="$(printf '%s' "${port}" | base64 -d 2>/dev/null || true)"
   [[ -n "${host}" && -n "${name}" && -n "${user}" && -n "${password}" && -n "${port}" ]]
 }
 
@@ -549,6 +548,15 @@ deploy_authentik_helm() {
   helm repo update authentik >/dev/null
 
   local progress_pid=""
+  cleanup_authentik_helm_progress() {
+    if [[ -n "${progress_pid}" ]]; then
+      kill "${progress_pid}" 2>/dev/null || true
+      wait "${progress_pid}" 2>/dev/null || true
+      progress_pid=""
+    fi
+  }
+  trap cleanup_authentik_helm_progress EXIT
+
   log_authentik_helm_progress &
   progress_pid=$!
 
@@ -558,14 +566,14 @@ deploy_authentik_helm() {
     --values "${AUTHENTIK_VALUES}" \
     --wait \
     --timeout "${AUTHENTIK_HELM_TIMEOUT}"; then
-    kill "${progress_pid}" 2>/dev/null || true
-    wait "${progress_pid}" 2>/dev/null || true
+    cleanup_authentik_helm_progress
+    trap - EXIT
     log_error "Authentik Helm release failed — inspect: kubectl -n ${AUTHENTIK_NAMESPACE} get pods,logs deploy/authentik-server"
     return 1
   fi
 
-  kill "${progress_pid}" 2>/dev/null || true
-  wait "${progress_pid}" 2>/dev/null || true
+  cleanup_authentik_helm_progress
+  trap - EXIT
 
   wait_for_authentik
 }
