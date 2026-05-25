@@ -148,7 +148,8 @@ OpenAPI versionada em `/v1/`; erros **RFC 7807**. Gateway valida JSON Schema; se
 | 05 | Segurança, observabilidade |
 | 07 | Plataforma, Makefile, K3s, deploy local |
 | 08 | Índice completo |
+| — | [Simplificação de Projeto](simplificacao-de-projeto) — eliminação CI/CD, deploy local |
 
 Todos os ADRs e especificações detalhadas são documentos filhos de **Desafio Fluxo de Caixa** no Helper AI MCP.
 
-> **Sincronização 2026-05-20:** alinhado aos docs **01–05** e **07** (v5+) — inclusão de `svc-consulta`, nomenclatura `data_competencia`, stream NATS `lancamentos.events`, CloudNativePG.
+> **Sincronização 2026-05-25:** deploy local podman→k3s (`:dev`), sem CI/GitOps — ver [Simplificação de Projeto](simplificacao-de-projeto). Alinhado aos docs **01–05** e **07** (v5+).
