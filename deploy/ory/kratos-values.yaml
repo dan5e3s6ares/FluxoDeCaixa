@@ -2,7 +2,7 @@
 # Chart: https://k8s.ory.sh/helm/charts (ory/kratos)
 #
 # Expected secrets in namespace `security`:
-#   fluxo-kratos — dsn (URL-encoded CNPG creds), secretsDefault, secretsCookie, secretsCipher
+#   fluxo-kratos — dsn, secretsDefault, secretsCookie, secretsCipher, smtpConnectionURI
 #   fluxo-kratos-pg — username, password (CNPG app owner; DB `kratos` via pg-bootstrap)
 #
 # Public API (in-cluster): http://kratos-public.security.svc.cluster.local/
@@ -33,9 +33,13 @@ kratos:
           ui_url: http://127.0.0.1:4455/login
         registration:
           ui_url: http://127.0.0.1:4455/registration
-    # Do not set courier.smtp.connection_uri here: with secret.enabled=false the chart
-    # requires fluxo-kratos key smtpConnectionURI (CreateContainerConfigError if missing).
-    # Courier is disabled below; SMTP is not used in this stack.
+    # Placeholder SMTP satisfies Kratos config validation (identity schema uses email
+    # recovery/verification). Chart maps connection_uri -> fluxo-kratos.smtpConnectionURI;
+    # deploy-platform.sh seeds that key. Courier workload is disabled below.
+    courier:
+      smtp:
+        connection_uri: smtps://unused:unused@127.0.0.1:65534/?skip_ssl_verify=true
+        from_address: no-reply@fluxo-caixa.local
     secrets: {}
 
   identitySchemas:
