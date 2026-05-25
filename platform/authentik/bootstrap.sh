@@ -7,6 +7,8 @@ AUTHENTIK_TOKEN="${AUTHENTIK_BOOTSTRAP_TOKEN:?AUTHENTIK_BOOTSTRAP_TOKEN is requi
 APP_SLUG="${APP_SLUG:-fluxo-caixa}"
 MAPPING_NAME="${MAPPING_NAME:-fluxo-merchant-id}"
 REQUIRED_CLIENTS="${REQUIRED_CLIENTS:-svc-lancamentos,svc-consolidado,svc-consulta}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-5}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
 
 log() {
   echo "[authentik-bootstrap] $*"
@@ -20,12 +22,16 @@ api() {
 
   if [ -n "${body}" ]; then
     response="$(curl -sS -w '\n%{http_code}' -X "${method}" \
+      --connect-timeout "${CURL_CONNECT_TIMEOUT}" \
+      --max-time "${CURL_MAX_TIME}" \
       -H "Authorization: Bearer ${AUTHENTIK_TOKEN}" \
       -H "Content-Type: application/json" \
       "${AUTHENTIK_URL}${path}" \
       --data "${body}")"
   else
     response="$(curl -sS -w '\n%{http_code}' -X "${method}" \
+      --connect-timeout "${CURL_CONNECT_TIMEOUT}" \
+      --max-time "${CURL_MAX_TIME}" \
       -H "Authorization: Bearer ${AUTHENTIK_TOKEN}" \
       -H "Content-Type: application/json" \
       "${AUTHENTIK_URL}${path}")"
@@ -75,8 +81,18 @@ wait_for_authentik() {
   local max="${AUTHENTIK_WAIT_ATTEMPTS:-60}"
   local delay="${AUTHENTIK_WAIT_DELAY:-2}"
 
+  if [ "${AUTHENTIK_SKIP_READY_WAIT:-0}" = "1" ]; then
+    if curl -sf --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
+        "${AUTHENTIK_URL}/-/health/ready/" >/dev/null 2>&1; then
+      log "Authentik ready at ${AUTHENTIK_URL} (skip wait — deploy-platform verified)"
+      return 0
+    fi
+    log "AUTHENTIK_SKIP_READY_WAIT=1 but health check failed; falling back to wait loop"
+  fi
+
   while [ "${attempt}" -le "${max}" ]; do
-    if curl -sf "${AUTHENTIK_URL}/-/health/ready/" >/dev/null 2>&1; then
+    if curl -sf --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
+        "${AUTHENTIK_URL}/-/health/ready/" >/dev/null 2>&1; then
       log "Authentik ready at ${AUTHENTIK_URL}"
       return 0
     fi
@@ -90,7 +106,8 @@ wait_for_authentik() {
 }
 
 jwks_available() {
-  curl -sf "${AUTHENTIK_URL}/application/o/${APP_SLUG}/jwks/" >/dev/null 2>&1
+  curl -sf --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
+    "${AUTHENTIK_URL}/application/o/${APP_SLUG}/jwks/" >/dev/null 2>&1
 }
 
 wait_for_jwks() {
@@ -113,7 +130,9 @@ wait_for_jwks() {
 }
 
 application_exists() {
-  api GET "/api/v3/core/applications/?slug=${APP_SLUG}" | json_field_present slug "${APP_SLUG}"
+  local body
+  body="$(api_body "/api/v3/core/applications/?slug=${APP_SLUG}")"
+  [ -n "${body}" ] && printf '%s' "${body}" | json_field_present slug "${APP_SLUG}"
 }
 
 mapping_exists() {
@@ -124,7 +143,9 @@ mapping_exists() {
 
 provider_client_exists() {
   local client_id="$1"
-  api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | json_field_present client_id "${client_id}"
+  local body
+  body="$(api_body "/api/v3/providers/oauth2/?client_id=${client_id}")"
+  [ -n "${body}" ] && printf '%s' "${body}" | json_field_present client_id "${client_id}"
 }
 
 api_body() {
@@ -145,13 +166,42 @@ flow_pk() {
   printf '%s' "${pk}"
 }
 
+scope_mapping_list_body() {
+  local query="$1"
+  local base path body
+
+  for base in "/api/v3/propertymappings/provider/scope/" \
+              "/api/v3/propertymappings/oauth2/"; do
+    if [ -n "${query}" ]; then
+      path="${base}?${query}"
+    else
+      path="${base}"
+    fi
+    body="$(api_body "${path}")"
+    if [ -n "${body}" ]; then
+      printf '%s' "${body}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 scope_mapping_pk() {
-  # Authentik list filters vary by version; try scope_name, then search.
+  # Authentik 2025.x lists built-in scopes at provider/scope; legacy oauth2 path may be empty.
   local scope="$1"
   local query body pk
 
+  body="$(api_body "/api/v3/propertymappings/provider/scope/?managed=${scope}")"
+  if [ -n "${body}" ] && printf '%s' "${body}" | json_field_present scope_name "${scope}"; then
+    pk="$(printf '%s' "${body}" | json_pk)"
+    if [ -n "${pk}" ]; then
+      printf '%s' "${pk}"
+      return 0
+    fi
+  fi
+
   for query in "scope_name=${scope}" "search=${scope}"; do
-    body="$(api_body "/api/v3/propertymappings/oauth2/?${query}")"
+    body="$(scope_mapping_list_body "${query}" || true)"
     if [ -z "${body}" ]; then
       continue
     fi
@@ -164,6 +214,16 @@ scope_mapping_pk() {
       return 0
     fi
   done
+
+  body="$(scope_mapping_list_body "" || true)"
+  if [ -n "${body}" ] && printf '%s' "${body}" | json_field_present scope_name "${scope}"; then
+    pk="$(printf '%s' "${body}" | json_pk)"
+    if [ -n "${pk}" ]; then
+      printf '%s' "${pk}"
+      return 0
+    fi
+  fi
+
   return 1
 }
 
@@ -187,23 +247,32 @@ signing_key_pk() {
   printf '%s' "${pk}"
 }
 
-ensure_merchant_id_mapping() {
-  if mapping_exists; then
-    log "property mapping ${MAPPING_NAME} already exists"
-    return 0
-  fi
-
-  log "creating property mapping ${MAPPING_NAME} (claim merchant_id)"
-  if api POST "/api/v3/propertymappings/oauth2/" "$(cat <<EOF
+merchant_mapping_payload() {
+  cat <<EOF
 {
   "name": "${MAPPING_NAME}",
   "scope_name": "merchant_id",
   "expression": "return user.attributes.get(\\\"merchant_id\\\", [None])[0]"
 }
 EOF
-)"; then
+}
+
+ensure_merchant_id_mapping() {
+  local payload path
+
+  if mapping_exists; then
+    log "property mapping ${MAPPING_NAME} already exists"
     return 0
   fi
+
+  payload="$(merchant_mapping_payload)"
+  log "creating property mapping ${MAPPING_NAME} (claim merchant_id)"
+  for path in "/api/v3/propertymappings/provider/scope/" \
+              "/api/v3/propertymappings/oauth2/"; do
+    if api POST "${path}" "${payload}"; then
+      return 0
+    fi
+  done
 
   if mapping_exists; then
     log "property mapping ${MAPPING_NAME} present after create conflict (idempotent)"
@@ -273,13 +342,14 @@ upsert_oauth2_provider() {
   local auth_flow="$4"
   local invalid_flow="$5"
   local signing_key="$6"
-  local body provider_pk
+  local body provider_pk provider_body
 
   body="$(oauth2_provider_payload "${name}" "${client_id}" "${property_mappings}" \
     "${auth_flow}" "${invalid_flow}" "${signing_key}")"
 
   if provider_client_exists "${client_id}"; then
-    provider_pk="$(api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | json_pk)"
+    provider_body="$(api_body "/api/v3/providers/oauth2/?client_id=${client_id}")"
+    provider_pk="$(printf '%s' "${provider_body}" | json_pk)"
     log "updating OAuth2 provider ${client_id} (pk ${provider_pk})"
     api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}"
     printf '%s' "${provider_pk}"
@@ -292,7 +362,8 @@ upsert_oauth2_provider() {
   fi
 
   if provider_client_exists "${client_id}"; then
-    provider_pk="$(api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | json_pk)"
+    provider_body="$(api_body "/api/v3/providers/oauth2/?client_id=${client_id}")"
+    provider_pk="$(printf '%s' "${provider_body}" | json_pk)"
     log "updating OAuth2 provider ${client_id} after create conflict (pk ${provider_pk})"
     api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}"
     printf '%s' "${provider_pk}"
@@ -348,7 +419,7 @@ oauth2_defaults_ready() {
 
 ensure_application_linked() {
   local provider_pk="$1"
-  local app_pk
+  local app_pk app_body
 
   if ! application_exists; then
     log "creating application ${APP_SLUG}"
@@ -367,7 +438,8 @@ EOF
     fi
   fi
 
-  app_pk="$(api GET "/api/v3/core/applications/?slug=${APP_SLUG}" | json_pk)"
+  app_body="$(api_body "/api/v3/core/applications/?slug=${APP_SLUG}")"
+  app_pk="$(printf '%s' "${app_body}" | json_pk)"
   [ -n "${app_pk}" ] || return 1
   log "linking application ${APP_SLUG} to provider ${provider_pk} (pk ${app_pk})"
   api PATCH "/api/v3/core/applications/${app_pk}/" "$(cat <<EOF
@@ -396,7 +468,11 @@ ensure_application_provider() {
     "${auth_flow}" "${invalid_flow}" "${signing_key}")"
 
   ensure_application_linked "${provider_pk}"
-  wait_for_jwks
+  if [ "${AUTHENTIK_SKIP_JWKS_WAIT:-0}" = "1" ]; then
+    log "skipping JWKS wait (deploy-platform validates OIDC discovery)"
+  else
+    wait_for_jwks
+  fi
 }
 
 ensure_service_clients() {

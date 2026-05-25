@@ -69,4 +69,8 @@ assert_eq "scope_name filter body" "3" \
 assert_eq "search fallback body" "7" \
   "$(printf '{"results":[{"scope_name": "profile","pk":7,"name":"x"}]}' | scope_mapping_pk_from_body profile)"
 
+managed_body='{"results":[{"scope_name": "openid","pk":1,"managed":"goauthentik.io/providers/oauth2/scope-openid"}]}'
+assert_match "managed scope body" "${managed_body}" scope_name openid
+assert_eq "managed scope pk" "1" "$(printf '%s' "${managed_body}" | json_pk)"
+
 echo "platform/authentik/test-bootstrap-helpers.sh — all tests passed"

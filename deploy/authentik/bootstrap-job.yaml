@@ -29,13 +29,16 @@ spec:
                 secretKeyRef:
                   name: fluxo-authentik
                   key: AUTHENTIK_BOOTSTRAP_TOKEN
+            # deploy-platform.sh already waits for Authentik health; skip redundant wait when ready.
+            - name: AUTHENTIK_SKIP_READY_WAIT
+              value: "1"
+            # deploy-platform.sh validates OIDC discovery after the Job completes.
+            - name: AUTHENTIK_SKIP_JWKS_WAIT
+              value: "1"
+            # AUTHENTIK_WAIT_* only apply when SKIP_READY_WAIT=1 but the one-shot health check fails.
             - name: AUTHENTIK_WAIT_ATTEMPTS
               value: "90"
             - name: AUTHENTIK_WAIT_DELAY
-              value: "5"
-            - name: JWKS_WAIT_ATTEMPTS
-              value: "90"
-            - name: JWKS_WAIT_DELAY
               value: "5"
             - name: OAUTH2_DEFAULTS_WAIT_ATTEMPTS
               value: "90"
