@@ -675,6 +675,7 @@ run_authentik_bootstrap() {
 
   log_info "applying authentik-bootstrap manifests from ${AUTHENTIK_MANIFESTS}"
   kubectl_cmd delete job authentik-bootstrap -n "${AUTHENTIK_NAMESPACE}" --ignore-not-found
+  kubectl_cmd delete configmap authentik-bootstrap -n "${AUTHENTIK_NAMESPACE}" --ignore-not-found
   kubectl_apply_k "${AUTHENTIK_MANIFESTS}"
   wait_for_authentik_bootstrap
 }

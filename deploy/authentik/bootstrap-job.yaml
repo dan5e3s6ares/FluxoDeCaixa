@@ -33,6 +33,14 @@ spec:
               value: "90"
             - name: AUTHENTIK_WAIT_DELAY
               value: "5"
+            - name: JWKS_WAIT_ATTEMPTS
+              value: "90"
+            - name: JWKS_WAIT_DELAY
+              value: "5"
+            - name: OAUTH2_DEFAULTS_WAIT_ATTEMPTS
+              value: "30"
+            - name: OAUTH2_DEFAULTS_WAIT_DELAY
+              value: "2"
           volumeMounts:
             - name: scripts
               mountPath: /scripts
