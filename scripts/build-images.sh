@@ -64,11 +64,54 @@ build_service_image() {
   podman build -f "${dockerfile}" -t "${image_ref}" "${REPO_ROOT}"
 }
 
-import_image_to_k3s() {
+resolve_podman_image_ref() {
   local image_ref="$1"
 
+  if podman image exists "${image_ref}" 2>/dev/null; then
+    printf '%s' "${image_ref}"
+    return 0
+  fi
+  if podman image exists "localhost/${image_ref}" 2>/dev/null; then
+    printf 'localhost/%s' "${image_ref}"
+    return 0
+  fi
+
+  log_error "Image not found in podman: ${image_ref} (also tried localhost/${image_ref})"
+  exit 1
+}
+
+ensure_k3s_image_tag() {
+  local image_ref="$1"
+
+  if run_as_root k3s ctr images ls -q | grep -Fx "${image_ref}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if run_as_root k3s ctr images ls -q | grep -Fx "localhost/${image_ref}" >/dev/null 2>&1; then
+    log_info "tagging localhost/${image_ref} as ${image_ref} for k8s manifests..."
+    run_as_root k3s ctr images tag "localhost/${image_ref}" "${image_ref}"
+  fi
+}
+
+import_image_to_k3s() {
+  local image_ref="$1"
+  local podman_ref tarball
+
   log_info "importing ${image_ref} into k3s containerd..."
-  podman save "${image_ref}" | run_as_root k3s ctr images import -
+  podman_ref="$(resolve_podman_image_ref "${image_ref}")"
+  tarball="$(mktemp /tmp/fluxo-caixa-image-XXXXXX.tar)"
+
+  # Save to a tarball first; piping podman save into `k3s ctr images import -`
+  # often fails with "progress stream failed to recv" / EOF under sudo.
+  podman save -o "${tarball}" "${podman_ref}"
+
+  if ! retry 3 5 run_as_root k3s ctr images import "${tarball}"; then
+    rm -f "${tarball}"
+    log_error "failed to import ${image_ref} into k3s containerd"
+    exit 1
+  fi
+  rm -f "${tarball}"
+
+  ensure_k3s_image_tag "${image_ref}"
 }
 
 main() {
