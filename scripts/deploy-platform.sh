@@ -59,6 +59,10 @@ AUTHENTIK_READY_ATTEMPTS="${AUTHENTIK_READY_ATTEMPTS:-90}"
 AUTHENTIK_READY_DELAY="${AUTHENTIK_READY_DELAY:-5}"
 AUTHENTIK_BOOTSTRAP_ATTEMPTS="${AUTHENTIK_BOOTSTRAP_ATTEMPTS:-90}"
 AUTHENTIK_BOOTSTRAP_DELAY="${AUTHENTIK_BOOTSTRAP_DELAY:-5}"
+AUTHENTIK_HELM_TIMEOUT="${AUTHENTIK_HELM_TIMEOUT:-20m}"
+AUTHENTIK_PG_HOST="${AUTHENTIK_PG_HOST:-fluxo-pg-rw.database.svc.cluster.local}"
+AUTHENTIK_PG_NAME="${AUTHENTIK_PG_NAME:-authentik}"
+AUTHENTIK_PG_PORT="${AUTHENTIK_PG_PORT:-5432}"
 
 OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
 OBSERVABILITY_MANIFESTS="${REPO_ROOT}/deploy/observability"
@@ -436,9 +440,41 @@ ensure_authentik_pg_secret() {
     --from-literal=password="${FLUXO_PG_APP_PASSWORD}"
 }
 
+authentik_secret_has_postgres_config() {
+  local host name user password port
+  host="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
+    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__HOST}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  name="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
+    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__NAME}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  user="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
+    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__USER}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  password="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
+    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  port="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
+    -o jsonpath='{.data.AUTHENTIK_POSTGRESQL__PORT}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  [[ -n "${host}" && -n "${name}" && -n "${user}" && -n "${password}" && -n "${port}" ]]
+}
+
+patch_authentik_postgres_secret_keys() {
+  local encoded_host encoded_name encoded_user encoded_password encoded_port
+  encoded_host="$(printf '%s' "${AUTHENTIK_PG_HOST}" | base64 -w 0 2>/dev/null || printf '%s' "${AUTHENTIK_PG_HOST}" | base64)"
+  encoded_name="$(printf '%s' "${AUTHENTIK_PG_NAME}" | base64 -w 0 2>/dev/null || printf '%s' "${AUTHENTIK_PG_NAME}" | base64)"
+  encoded_user="$(printf '%s' "file:///pg-creds/username" | base64 -w 0 2>/dev/null || printf '%s' "file:///pg-creds/username" | base64)"
+  encoded_password="$(printf '%s' "file:///pg-creds/password" | base64 -w 0 2>/dev/null || printf '%s' "file:///pg-creds/password" | base64)"
+  encoded_port="$(printf '%s' "${AUTHENTIK_PG_PORT}" | base64 -w 0 2>/dev/null || printf '%s' "${AUTHENTIK_PG_PORT}" | base64)"
+
+  log_info "patching fluxo-authentik with CNPG PostgreSQL env (existingSecret mode ignores values.yaml authentik.postgresql)"
+  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" patch secret fluxo-authentik --type merge \
+    -p "{\"data\":{\"AUTHENTIK_POSTGRESQL__HOST\":\"${encoded_host}\",\"AUTHENTIK_POSTGRESQL__NAME\":\"${encoded_name}\",\"AUTHENTIK_POSTGRESQL__USER\":\"${encoded_user}\",\"AUTHENTIK_POSTGRESQL__PASSWORD\":\"${encoded_password}\",\"AUTHENTIK_POSTGRESQL__PORT\":\"${encoded_port}\"}}"
+}
+
 ensure_authentik_auth_secret() {
   if authentik_auth_secret_ready; then
     log_info "secret exists: fluxo-authentik (${AUTHENTIK_NAMESPACE})"
+    if authentik_secret_has_postgres_config; then
+      return 0
+    fi
+    patch_authentik_postgres_secret_keys
     return 0
   fi
 
@@ -451,7 +487,21 @@ ensure_authentik_auth_secret() {
   kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" create secret generic fluxo-authentik \
     --from-literal=AUTHENTIK_SECRET_KEY="${secret_key}" \
     --from-literal=AUTHENTIK_BOOTSTRAP_PASSWORD="${bootstrap_password}" \
-    --from-literal=AUTHENTIK_BOOTSTRAP_TOKEN="${bootstrap_token}"
+    --from-literal=AUTHENTIK_BOOTSTRAP_TOKEN="${bootstrap_token}" \
+    --from-literal=AUTHENTIK_POSTGRESQL__HOST="${AUTHENTIK_PG_HOST}" \
+    --from-literal=AUTHENTIK_POSTGRESQL__NAME="${AUTHENTIK_PG_NAME}" \
+    --from-literal=AUTHENTIK_POSTGRESQL__USER="file:///pg-creds/username" \
+    --from-literal=AUTHENTIK_POSTGRESQL__PASSWORD="file:///pg-creds/password" \
+    --from-literal=AUTHENTIK_POSTGRESQL__PORT="${AUTHENTIK_PG_PORT}"
+}
+
+log_authentik_helm_progress() {
+  local interval="${AUTHENTIK_HELM_PROGRESS_INTERVAL:-30}"
+  while sleep "${interval}"; do
+    kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
+      -l "app.kubernetes.io/name=authentik,app.kubernetes.io/instance=${AUTHENTIK_RELEASE}" \
+      --no-headers 2>/dev/null || true
+  done
 }
 
 authentik_server_pods_ready() {
@@ -493,16 +543,29 @@ deploy_authentik_helm() {
   ensure_authentik_pg_secret
   ensure_authentik_auth_secret
 
-  log_info "helm upgrade --install ${AUTHENTIK_RELEASE} authentik/authentik (chart ${AUTHENTIK_CHART_VERSION})"
+  log_info "helm upgrade --install ${AUTHENTIK_RELEASE} authentik/authentik (chart ${AUTHENTIK_CHART_VERSION}, timeout ${AUTHENTIK_HELM_TIMEOUT})"
+  log_info "Authentik first install: image pull + DB migrations can take several minutes; pod status logged every ${AUTHENTIK_HELM_PROGRESS_INTERVAL:-30}s"
   helm repo add authentik https://charts.goauthentik.io >/dev/null 2>&1 || true
   helm repo update authentik >/dev/null
 
-  helm upgrade --install "${AUTHENTIK_RELEASE}" authentik/authentik \
+  local progress_pid=""
+  log_authentik_helm_progress &
+  progress_pid=$!
+
+  if ! helm upgrade --install "${AUTHENTIK_RELEASE}" authentik/authentik \
     --namespace "${AUTHENTIK_NAMESPACE}" \
     --version "${AUTHENTIK_CHART_VERSION}" \
     --values "${AUTHENTIK_VALUES}" \
     --wait \
-    --timeout 10m
+    --timeout "${AUTHENTIK_HELM_TIMEOUT}"; then
+    kill "${progress_pid}" 2>/dev/null || true
+    wait "${progress_pid}" 2>/dev/null || true
+    log_error "Authentik Helm release failed — inspect: kubectl -n ${AUTHENTIK_NAMESPACE} get pods,logs deploy/authentik-server"
+    return 1
+  fi
+
+  kill "${progress_pid}" 2>/dev/null || true
+  wait "${progress_pid}" 2>/dev/null || true
 
   wait_for_authentik
 }

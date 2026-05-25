@@ -28,6 +28,15 @@ validate_static_authentik_config() {
   [[ -f "${REPO_ROOT}/deploy/authentik/values.yaml" ]]
   [[ -f "${REPO_ROOT}/platform/authentik/bootstrap.sh" ]]
   [[ ! -d "${REPO_ROOT}/deploy/keycloak" ]]
+
+  log_info "validate: Authentik values avoid duplicate AUTHENTIK_LISTEN__HTTP env"
+  if grep -E '^[[:space:]]*- name: AUTHENTIK_LISTEN__HTTP' "${REPO_ROOT}/deploy/authentik/values.yaml"; then
+    log_error "deploy/authentik/values.yaml must not set AUTHENTIK_LISTEN__HTTP (chart injects it from containerPorts.http)"
+    exit 1
+  fi
+
+  log_info "validate: deploy-platform seeds PostgreSQL env in fluxo-authentik for existingSecret mode"
+  grep -q 'AUTHENTIK_POSTGRESQL__HOST' "${REPO_ROOT}/scripts/deploy-platform.sh"
 }
 
 validate_idp_wait_budget() {
