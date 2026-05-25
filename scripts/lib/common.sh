@@ -221,11 +221,6 @@ resolve_svc_target() {
       SVC_DEPLOYMENT="redis-master"
       SVC_SELECTOR="app.kubernetes.io/name=redis"
       ;;
-    keycloak)
-      SVC_NAMESPACE="security"
-      SVC_DEPLOYMENT="keycloak"
-      SVC_SELECTOR="app.kubernetes.io/name=keycloak"
-      ;;
     krakend)
       SVC_NAMESPACE="gateway"
       SVC_DEPLOYMENT="krakend"
@@ -250,7 +245,7 @@ resolve_svc_target() {
       SVC_SELECTOR="app.kubernetes.io/instance=cert-manager"
       ;;
     *)
-      log_error "Unknown service '${svc}'. Valid: lancamentos, consolidado, consulta, nats, postgres, redis, keycloak, krakend, prometheus, grafana, otel"
+      log_error "Unknown service '${svc}'. Valid: lancamentos, consolidado, consulta, nats, postgres, redis, krakend, prometheus, grafana, otel"
       return 1
       ;;
   esac

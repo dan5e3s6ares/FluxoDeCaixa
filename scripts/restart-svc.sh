@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 SVC="${1:-}"
 if [[ -z "${SVC}" ]]; then
   log_error "Usage: restart-svc.sh <service>"
-  log_error "Services: lancamentos, consolidado, consulta, nats, postgres, redis, keycloak, krakend, prometheus, grafana, otel"
+  log_error "Services: lancamentos, consolidado, consulta, nats, postgres, redis, krakend, prometheus, grafana, otel"
   exit 1
 fi
 

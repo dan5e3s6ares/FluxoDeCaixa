@@ -8,9 +8,9 @@ metadata:
     app.kubernetes.io/part-of: fluxo-caixa
 data:
   NATS_URL: nats://nats.messaging.svc.cluster.local:4222
-  KEYCLOAK_URL: http://keycloak.security.svc.cluster.local:8080
-  KEYCLOAK_REALM: fluxo-caixa
-  KEYCLOAK_CLIENT_ID: svc-consulta
+  # Authentik OIDC stubs — filled by follow-up deploy tasks
+  OIDC_ISSUER: http://authentik.security.svc.cluster.local/application/o/fluxo-caixa/
+  OIDC_CLIENT_ID: svc-consulta
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4317
   OTEL_SERVICE_NAME: svc-consulta
   LOG_LEVEL: INFO

@@ -31,26 +31,26 @@ wait_for_postgres() {
   return 1
 }
 
-ensure_keycloak_database() {
+ensure_authentik_database() {
   if [ -z "${PGSUPERPASSWORD:-}" ]; then
-    log "PGSUPERPASSWORD not set; skipping keycloak database ensure"
+    log "PGSUPERPASSWORD not set; skipping authentik database ensure"
     return 0
   fi
 
   if PGPASSWORD="${PGSUPERPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGSUPERUSER}" -d postgres -tAc \
-    "SELECT 1 FROM pg_database WHERE datname = 'keycloak'" | grep -q '^1$'; then
-    log "database keycloak already exists"
+    "SELECT 1 FROM pg_database WHERE datname = 'authentik'" | grep -q '^1$'; then
+    log "database authentik already exists"
     return 0
   fi
 
-  log "creating database keycloak (owner ${PGUSER})"
+  log "creating database authentik (owner ${PGUSER})"
   PGPASSWORD="${PGSUPERPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGSUPERUSER}" -d postgres -v ON_ERROR_STOP=1 \
-    -c "CREATE DATABASE keycloak OWNER \"${PGUSER}\";"
+    -c "CREATE DATABASE authentik OWNER \"${PGUSER}\";"
 }
 
 main() {
   wait_for_postgres
-  ensure_keycloak_database
+  ensure_authentik_database
   log "applying bootstrap SQL"
   psql -v ON_ERROR_STOP=1 -f /scripts/bootstrap.sql
   log "verifying schemas"

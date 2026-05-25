@@ -87,7 +87,7 @@ parse_args() {
         FOLLOW=true
         shift
         ;;
-      all|lancamentos|consolidado|consulta|nats|postgres|pg|redis|keycloak|krakend|prometheus|grafana|otel)
+      all|lancamentos|consolidado|consulta|nats|postgres|pg|redis|krakend|prometheus|grafana|otel)
         SVC="$1"
         shift
         ;;
