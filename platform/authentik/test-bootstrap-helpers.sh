@@ -8,7 +8,9 @@ eval "$(
   sed -n \
     -e '/^json_pk()/,/^}/p' \
     -e '/^json_field_present()/,/^}/p' \
+    -e '/^json_ref()/,/^}/p' \
     -e '/^managed_scope_filter()/,/^}/p' \
+    -e '/^log()/,/^}/p' \
     "${SCRIPT_DIR}/bootstrap.sh"
 )"
 
@@ -75,6 +77,18 @@ assert_match "managed scope body" "${managed_body}" scope_name openid
 assert_eq "managed scope pk" "1" "$(printf '%s' "${managed_body}" | json_pk)"
 assert_eq "managed_scope_filter openid" "goauthentik.io/providers/oauth2/scope-openid" \
   "$(managed_scope_filter openid)"
+
+assert_eq "json_ref integer pk" "42" "$(json_ref 42)"
+assert_eq "json_ref uuid pk" '"26edc911-30bd-4ecb-abd8-984b10355e1d"' \
+  "$(json_ref 26edc911-30bd-4ecb-abd8-984b10355e1d)"
+assert_eq "json_ref empty" "null" "$(json_ref '')"
+
+if log_msg="$(log 'stderr-only test' 2>&1 >/dev/null)"; then
+  : "log wrote to stderr"
+else
+  log_msg=""
+fi
+assert_eq "log writes to stderr" "[authentik-bootstrap] stderr-only test" "${log_msg}"
 
 MAPPING_NAME="fluxo-merchant-id"
 eval "$(sed -n '/^merchant_mapping_payload()/,/^}/p' "${SCRIPT_DIR}/bootstrap.sh")"
