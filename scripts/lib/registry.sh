@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Harbor / k3s / Podman registry resolution — self-contained in-VM vs legacy external.
 # Source after scripts/lib/common.sh. Requires write_if_changed + run_as_root in caller
-# (bootstrap-vm.sh, deploy-registry.sh) or define stubs below.
+# (bootstrap-vm.sh) or define stubs below.
 
 set -euo pipefail
 

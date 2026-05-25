@@ -145,7 +145,7 @@ main() {
   elif [[ "${HARBOR_MODE}" == "external" ]]; then
     configure_harbor_trust
   else
-    log_info "in-VM Harbor CA not yet published — deploy-registry.sh will finalize trust"
+    log_info "in-VM Harbor CA not yet published — configure_harbor_trust will finalize trust when Harbor is available"
   fi
 
   verify_commands
