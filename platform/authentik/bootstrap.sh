@@ -11,7 +11,7 @@ CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-5}"
 CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
 
 log() {
-  echo "[authentik-bootstrap] $*"
+  echo "[authentik-bootstrap] $*" >&2
 }
 
 preflight_commands() {
@@ -366,7 +366,7 @@ upsert_oauth2_provider() {
     provider_body="$(api_body "/api/v3/providers/oauth2/?client_id=${client_id}")"
     provider_pk="$(printf '%s' "${provider_body}" | json_pk)"
     log "updating OAuth2 provider ${client_id} (pk ${provider_pk})"
-    api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}"
+    api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}" >/dev/null
     printf '%s' "${provider_pk}"
     return 0
   fi
@@ -380,7 +380,7 @@ upsert_oauth2_provider() {
     provider_body="$(api_body "/api/v3/providers/oauth2/?client_id=${client_id}")"
     provider_pk="$(printf '%s' "${provider_body}" | json_pk)"
     log "updating OAuth2 provider ${client_id} after create conflict (pk ${provider_pk})"
-    api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}"
+    api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}" >/dev/null
     printf '%s' "${provider_pk}"
     return 0
   fi
