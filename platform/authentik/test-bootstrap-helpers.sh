@@ -76,4 +76,15 @@ assert_eq "managed scope pk" "1" "$(printf '%s' "${managed_body}" | json_pk)"
 assert_eq "managed_scope_filter openid" "goauthentik.io/providers/oauth2/scope-openid" \
   "$(managed_scope_filter openid)"
 
+MAPPING_NAME="fluxo-merchant-id"
+eval "$(sed -n '/^merchant_mapping_payload()/,/^}/p' "${SCRIPT_DIR}/bootstrap.sh")"
+payload="$(merchant_mapping_payload)"
+if ! printf '%s' "${payload}" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+  echo "FAIL merchant_mapping_payload: invalid JSON" >&2
+  printf '%s\n' "${payload}" >&2
+  exit 1
+fi
+echo "ok merchant_mapping_payload valid json"
+assert_match "merchant_mapping_payload scope_name" "${payload}" scope_name merchant_id
+
 echo "platform/authentik/test-bootstrap-helpers.sh — all tests passed"
