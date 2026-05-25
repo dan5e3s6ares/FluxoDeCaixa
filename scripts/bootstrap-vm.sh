@@ -4,8 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
-# shellcheck source=lib/registry.sh
-source "${SCRIPT_DIR}/lib/registry.sh"
 
 MIN_CPUS="${MIN_CPUS:-8}"
 MIN_RAM_MB="${MIN_RAM_MB:-16384}"
@@ -20,23 +18,6 @@ run_as_root() {
     log_error "Root privileges required: $*"
     exit 1
   fi
-}
-
-write_if_changed() {
-  local dest="$1"
-  local tmp
-  tmp="$(mktemp)"
-  cat >"${tmp}"
-  if [[ -f "${dest}" ]] && cmp -s "${tmp}" "${dest}"; then
-    log_info "unchanged: ${dest}"
-    rm -f "${tmp}"
-    return 1
-  fi
-  run_as_root mkdir -p "$(dirname "${dest}")"
-  run_as_root install -m 0644 "${tmp}" "${dest}"
-  rm -f "${tmp}"
-  log_info "updated: ${dest}"
-  return 0
 }
 
 validate_resources() {
@@ -126,30 +107,13 @@ main() {
   log_info "bootstrap-vm.sh — validating VM resources and tooling"
   validate_resources
 
-  resolve_harbor_config
-  log_info "Harbor config: mode=${HARBOR_MODE} registry=${HARBOR_REGISTRY} image_ref=${HARBOR_IMAGE_REGISTRY}"
-
-  ensure_harbor_hosts_entry
-  configure_k3s_registries
-  configure_podman_registries
-  write_registry_env_file
-
   install_make
   install_podman
   install_uv
   install_k3s
 
-  if [[ -f "${HARBOR_CA_CERT}" ]]; then
-    install_system_harbor_ca "${HARBOR_CA_CERT}"
-    configure_k3s_registries
-  elif [[ "${HARBOR_MODE}" == "external" ]]; then
-    configure_harbor_trust
-  else
-    log_info "in-VM Harbor CA not yet published — deploy-registry.sh will finalize trust"
-  fi
-
   verify_commands
-  log_info "bootstrap-vm.sh — complete (registry env: ${REGISTRY_ENV_FILE})"
+  log_info "bootstrap-vm.sh — complete (k3s, podman, uv, make)"
 }
 
 main "$@"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate SealedSecrets for GitOps overlays (doc 07).
+# Generate SealedSecrets for k8s overlays (doc 07).
 # Requires: sealed-secrets controller, kubeseal, kubectl.
 set -euo pipefail
 
@@ -11,22 +11,7 @@ OVERLAY_SEALED_DIR="${REPO_ROOT}/deploy/k8s/overlays/${ENV}/sealed"
 SEALED_SECRETS_NAMESPACE="${SEALED_SECRETS_NAMESPACE:-kube-system}"
 CONTROLLER_NAME="${SEALED_SECRETS_CONTROLLER:-sealed-secrets}"
 
-REGISTRY_ENV_FILE="${REGISTRY_ENV_FILE:-/etc/fluxo-caixa/registry.env}"
-if [[ -f "${REGISTRY_ENV_FILE}" ]]; then
-  # shellcheck disable=SC1090
-  set -a
-  source "${REGISTRY_ENV_FILE}"
-  set +a
-fi
-HARBOR_REGISTRY="${HARBOR_REGISTRY:-${HARBOR_IMAGE_REGISTRY:-harbor.local:8080}}"
-HARBOR_USERNAME="${HARBOR_USERNAME:-admin}"
-HARBOR_PASSWORD="${HARBOR_PASSWORD:-Harbor12345}"
-
 FLUXO_NAMESPACE="${FLUXO_NAMESPACE:-fluxo-caixa}"
-ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
-
-GIT_REPO_USERNAME="${GIT_REPO_USERNAME:-}"
-GIT_REPO_PASSWORD="${GIT_REPO_PASSWORD:-}"
 
 log() { echo "[sealed-secrets] $*"; }
 
@@ -80,30 +65,6 @@ seal_from_literal() {
   log "wrote ${out_file}"
 }
 
-seal_dockerconfig() {
-  local name="$1"
-  local namespace="$2"
-  local registry="$3"
-  local username="$4"
-  local password="$5"
-  local out_file="$6"
-
-  kubectl_cmd -n "${namespace}" delete secret "${name}" --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${namespace}" create secret docker-registry "${name}" \
-    --docker-server="${registry}" \
-    --docker-username="${username}" \
-    --docker-password="${password}" \
-    --dry-run=client -o yaml \
-    | kubeseal \
-      --controller-name="${CONTROLLER_NAME}" \
-      --controller-namespace="${SEALED_SECRETS_NAMESPACE}" \
-      --format yaml \
-      --namespace "${namespace}" \
-      --name "${name}" \
-      >"${out_file}"
-  log "wrote ${out_file}"
-}
-
 write_kustomization() {
   local dir="$1"
   shift
@@ -125,15 +86,7 @@ main() {
   mkdir -p "${OVERLAY_SEALED_DIR}"
   wait_for_controller
 
-  local -a resources=(harbor-pull-secret.yaml)
-
-  seal_dockerconfig \
-    harbor-pull-secret \
-    "${FLUXO_NAMESPACE}" \
-    "${HARBOR_REGISTRY}" \
-    "${HARBOR_USERNAME}" \
-    "${HARBOR_PASSWORD}" \
-    "${OVERLAY_SEALED_DIR}/harbor-pull-secret.yaml"
+  local -a resources=()
 
   if kubectl_cmd -n cache get secret fluxo-redis >/dev/null 2>&1; then
     local redis_password redis_url
@@ -175,15 +128,6 @@ main() {
     resources+=(fluxo-pg-app.yaml)
   else
     log "skip fluxo-pg-app (CNPG app secret not found in database namespace)"
-  fi
-
-  if [[ -n "${GIT_REPO_USERNAME}" && -n "${GIT_REPO_PASSWORD}" ]]; then
-    seal_from_literal repo-fluxo-caixa "${ARGOCD_NAMESPACE}" "${OVERLAY_SEALED_DIR}/argocd-repo-fluxo-caixa.yaml" \
-      --from-literal=username="${GIT_REPO_USERNAME}" \
-      --from-literal=password="${GIT_REPO_PASSWORD}"
-    resources+=(argocd-repo-fluxo-caixa.yaml)
-  else
-    log "skip argocd repo credentials (set GIT_REPO_USERNAME and GIT_REPO_PASSWORD)"
   fi
 
   write_kustomization "${OVERLAY_SEALED_DIR}" "${resources[@]}"

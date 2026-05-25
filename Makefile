@@ -1,4 +1,5 @@
-.PHONY: start stop status test test-e2e clean help logs restart vm-up vm-shell
+.PHONY: start bootstrap cluster-up build deploy-platform deploy-apps wait-healthy \
+	stop status test test-e2e clean help logs restart vm-up vm-shell
 
 CLUSTER_TYPE ?= k3s
 ENV ?= dev
@@ -8,18 +9,27 @@ VM_NAME ?= minha-vm
 VM_MEMORY ?= 32G
 VM_DISK ?= 120G
 VM_CPUS ?= 8
-export CLUSTER_TYPE ENV KRAKEND_NODEPORT
+export CLUSTER_TYPE ENV SVC KRAKEND_NODEPORT
 
-start:
-	@echo ">> Provisionando cluster e dependências (CLUSTER_TYPE=$(CLUSTER_TYPE), ENV=$(ENV))..."
+bootstrap:
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/bootstrap-vm.sh
-	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/deploy-registry.sh
-	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/deploy-gitea.sh
+
+cluster-up:
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/cluster-up.sh
+
+build:
+	./scripts/build-images.sh
+
+deploy-platform:
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/deploy-platform.sh
-	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/seed-images.sh
+
+deploy-apps:
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ENV=$(ENV) ./scripts/deploy-apps.sh
+
+wait-healthy:
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/wait-healthy.sh
+
+start: bootstrap cluster-up build deploy-platform deploy-apps wait-healthy
 	@echo ">> Stack pronta. Gateway: https://localhost:8080 (NodePort $(KRAKEND_NODEPORT))"
 
 stop:
@@ -44,6 +54,7 @@ logs:
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/logs.sh $(SVC)
 
 restart:
+	$(MAKE) build SVC=$(SVC)
 	CLUSTER_TYPE=$(CLUSTER_TYPE) ./scripts/restart-svc.sh $(SVC)
 
 # Multipass: recria VM, clona FluxoDeCaixa e roda make start (host precisa ter multipass).

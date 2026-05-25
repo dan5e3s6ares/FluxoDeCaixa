@@ -1,4 +1,4 @@
-# svc-lancamentos API — doc 07 (resources, envFrom, Harbor image)
+# svc-lancamentos API — doc 07 (resources, envFrom, local :dev image)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,7 +20,8 @@ spec:
     spec:
       containers:
         - name: lancamentos
-          image: harbor.local:8080/fluxo-caixa/svc-lancamentos:main-0000000
+          image: fluxo-caixa/lancamentos:dev
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000

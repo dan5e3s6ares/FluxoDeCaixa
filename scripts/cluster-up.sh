@@ -17,7 +17,6 @@ NAMESPACES=(
   messaging
   observability
   fluxo-caixa
-  argocd
 )
 
 run_as_root() {
