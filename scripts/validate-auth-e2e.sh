@@ -68,6 +68,10 @@ validate_static_ory_config() {
   grep -q 'preflight_commands' "${REPO_ROOT}/platform/ory/bootstrap.sh"
   grep -q 'alpine:3.20' "${REPO_ROOT}/deploy/ory/bootstrap-job.yaml"
   grep -q 'ory-token-hook' "${REPO_ROOT}/deploy/ory/token-hook.yaml"
+  grep -q 'fluxo-caixa/ory-token-hook:dev' "${REPO_ROOT}/deploy/ory/token-hook.yaml"
+  grep -q 'build_token_hook_image' "${REPO_ROOT}/scripts/build-images.sh"
+  [[ -f "${REPO_ROOT}/platform/ory/token_hook.py" ]]
+  [[ -f "${REPO_ROOT}/platform/ory/Dockerfile.token-hook" ]]
 
   log_info "validate: Ory bootstrap helper unit tests"
   sh "${REPO_ROOT}/platform/ory/test-bootstrap-helpers.sh"

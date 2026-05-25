@@ -1,0 +1,8 @@
+# Build from repository root: podman build -f platform/ory/Dockerfile.token-hook .
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+COPY platform/ory/token_hook.py .
+
+EXPOSE 8080
+CMD ["python3", "token_hook.py"]
