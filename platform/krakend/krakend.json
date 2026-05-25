@@ -84,10 +84,10 @@
       "extra_config": {
         "auth/validator": {
           "alg": "RS256",
-          "jwk_url": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa/protocol/openid-connect/certs",
+          "jwk_url": "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/jwks/",
           "cache": true,
           "cache_duration": 300,
-          "issuer": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa",
+          "issuer": "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/",
           "disable_jwk_security": true,
           "propagate_claims": [
             ["merchant_id", "x-merchant-id"],
@@ -171,10 +171,10 @@
       "extra_config": {
         "auth/validator": {
           "alg": "RS256",
-          "jwk_url": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa/protocol/openid-connect/certs",
+          "jwk_url": "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/jwks/",
           "cache": true,
           "cache_duration": 300,
-          "issuer": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa",
+          "issuer": "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/",
           "disable_jwk_security": true,
           "propagate_claims": [
             ["merchant_id", "x-merchant-id"],
@@ -227,10 +227,10 @@
       "extra_config": {
         "auth/validator": {
           "alg": "RS256",
-          "jwk_url": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa/protocol/openid-connect/certs",
+          "jwk_url": "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/jwks/",
           "cache": true,
           "cache_duration": 300,
-          "issuer": "http://keycloak.security.svc.cluster.local:8080/realms/fluxo-caixa",
+          "issuer": "http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/",
           "disable_jwk_security": true,
           "propagate_claims": [
             ["merchant_id", "x-merchant-id"],
