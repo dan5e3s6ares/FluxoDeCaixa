@@ -41,6 +41,11 @@ validate_static_authentik_config() {
   log_info "validate: Authentik bootstrap uses flexible JSON field matching (DRF spacing)"
   grep -q 'json_field_present' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
   grep -q 'wait_for_oauth2_defaults' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
+  grep -q 'scope_mapping_pk' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
+  grep -q 'ensure_application_linked' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
+
+  log_info "validate: Authentik bootstrap helper unit tests"
+  sh "${REPO_ROOT}/platform/authentik/test-bootstrap-helpers.sh"
 }
 
 validate_idp_wait_budget() {

@@ -130,8 +130,34 @@ flow_pk() {
   api GET "/api/v3/flows/instances/?slug=${slug}" | json_pk
 }
 
+scope_mapping_pk() {
+  # Authentik list filters vary by version; search then verify scope_name in the body.
+  local scope="$1"
+  local body pk
+
+  body="$(api GET "/api/v3/propertymappings/oauth2/?search=${scope}")"
+  if ! printf '%s' "${body}" | json_field_present scope_name "${scope}"; then
+    return 1
+  fi
+
+  pk="$(printf '%s' "${body}" | json_pk)"
+  [ -n "${pk}" ] || return 1
+  printf '%s' "${pk}"
+}
+
 signing_key_pk() {
-  api GET "/api/v3/crypto/certificatekeypairs/?search=authentik%20Self-signed%20Certificate" | json_pk
+  local pk
+
+  pk="$(api GET "/api/v3/crypto/certificatekeypairs/?search=authentik%20Self-signed%20Certificate" | json_pk)"
+  if [ -n "${pk}" ]; then
+    printf '%s' "${pk}"
+    return 0
+  fi
+
+  log "Self-signed certificate not found via search; using first available keypair"
+  pk="$(api GET "/api/v3/crypto/certificatekeypairs/" | json_pk)"
+  [ -n "${pk}" ] || return 1
+  printf '%s' "${pk}"
 }
 
 ensure_merchant_id_mapping() {
@@ -157,6 +183,29 @@ EOF
     return 0
   fi
   return 1
+}
+
+resolve_merchant_mapping_pk() {
+  mapping_pk="$(api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_pk)"
+}
+
+wait_for_merchant_mapping_pk() {
+  local attempt=1
+  local max="${MAPPING_WAIT_ATTEMPTS:-30}"
+  local delay="${MAPPING_WAIT_DELAY:-2}"
+
+  while [ "${attempt}" -le "${max}" ]; do
+    resolve_merchant_mapping_pk
+    if [ -n "${mapping_pk}" ] && mapping_exists; then
+      return 0
+    fi
+    log "waiting for property mapping ${MAPPING_NAME} (${attempt}/${max})..."
+    sleep "${delay}"
+    attempt=$((attempt + 1))
+  done
+
+  resolve_merchant_mapping_pk
+  [ -n "${mapping_pk}" ] && mapping_exists
 }
 
 oauth2_provider_payload() {
@@ -223,10 +272,9 @@ resolve_oauth2_defaults() {
   auth_flow="$(flow_pk default-provider-authorization-implicit-consent)"
   invalid_flow="$(flow_pk default-provider-invalidation-flow)"
   signing_key="$(signing_key_pk)"
-  openid_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=openid" | json_pk)"
-  email_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=email" | json_pk)"
-  profile_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=profile" | json_pk)"
-  mapping_pk="$(api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_pk)"
+  openid_pk="$(scope_mapping_pk openid || true)"
+  email_pk="$(scope_mapping_pk email || true)"
+  profile_pk="$(scope_mapping_pk profile || true)"
 }
 
 wait_for_oauth2_defaults() {
@@ -250,12 +298,43 @@ wait_for_oauth2_defaults() {
 
 oauth2_defaults_ready() {
   if [ -z "${auth_flow}" ] || [ -z "${invalid_flow}" ] || [ -z "${signing_key}" ] \
-    || [ -z "${openid_pk}" ] || [ -z "${email_pk}" ] || [ -z "${profile_pk}" ] \
-    || [ -z "${mapping_pk}" ]; then
-    log "missing Authentik defaults (flows, signing key, or scope mappings)"
+    || [ -z "${openid_pk}" ] || [ -z "${email_pk}" ] || [ -z "${profile_pk}" ]; then
+    log "missing Authentik defaults (flows, signing key, or built-in scope mappings)"
     return 1
   fi
   return 0
+}
+
+ensure_application_linked() {
+  local provider_pk="$1"
+  local app_pk
+
+  if ! application_exists; then
+    log "creating application ${APP_SLUG}"
+    if api POST "/api/v3/core/applications/" "$(cat <<EOF
+{
+  "name": "fluxo-caixa",
+  "slug": "${APP_SLUG}",
+  "provider": $(json_ref "${provider_pk}")
+}
+EOF
+)"; then
+      return 0
+    fi
+    if ! application_exists; then
+      return 1
+    fi
+  fi
+
+  app_pk="$(api GET "/api/v3/core/applications/?slug=${APP_SLUG}" | json_pk)"
+  [ -n "${app_pk}" ] || return 1
+  log "linking application ${APP_SLUG} to provider ${provider_pk} (pk ${app_pk})"
+  api PATCH "/api/v3/core/applications/${app_pk}/" "$(cat <<EOF
+{
+  "provider": $(json_ref "${provider_pk}")
+}
+EOF
+)"
 }
 
 ensure_application_provider() {
@@ -268,24 +347,14 @@ ensure_application_provider() {
   fi
 
   ensure_merchant_id_mapping
+  wait_for_merchant_mapping_pk || return 1
   wait_for_oauth2_defaults || return 1
 
   property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
   provider_pk="$(upsert_oauth2_provider "${APP_SLUG}" "${APP_SLUG}" "${property_mappings}" \
     "${auth_flow}" "${invalid_flow}" "${signing_key}")"
 
-  if ! application_exists; then
-    log "creating application ${APP_SLUG}"
-    api POST "/api/v3/core/applications/" "$(cat <<EOF
-{
-  "name": "fluxo-caixa",
-  "slug": "${APP_SLUG}",
-  "provider": $(json_ref "${provider_pk}")
-}
-EOF
-)"
-  fi
-
+  ensure_application_linked "${provider_pk}"
   wait_for_jwks
 }
 
@@ -293,6 +362,7 @@ ensure_service_clients() {
   local client_id
   local property_mappings
 
+  wait_for_merchant_mapping_pk || return 1
   wait_for_oauth2_defaults || return 1
   property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
 
