@@ -487,7 +487,8 @@ ensure_ory_pg_secret() {
 }
 
 ensure_kratos_secret() {
-  local dsn secrets_default secrets_cookie secrets_cipher
+  local dsn secrets_default secrets_cookie secrets_cipher smtp_connection_uri
+  local default_smtp_uri="smtps://unused:unused@127.0.0.1:65534/?skip_ssl_verify=true"
   dsn="$(ory_postgres_dsn "${KRATOS_PG_NAME}")"
 
   if kratos_secret_ready; then
@@ -497,17 +498,21 @@ ensure_kratos_secret() {
       "${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}")"
     secrets_cipher="$(read_ory_secret_literal fluxo-kratos secretsCipher \
       "${KRATOS_SECRETS_CIPHER:-$(openssl rand -base64 32)}")"
+    smtp_connection_uri="$(read_ory_secret_literal fluxo-kratos smtpConnectionURI \
+      "${KRATOS_SMTP_CONNECTION_URI:-${default_smtp_uri}}")"
   else
     secrets_default="${KRATOS_SECRETS_DEFAULT:-$(openssl rand -base64 32),$(openssl rand -base64 32)}"
     secrets_cookie="${KRATOS_SECRETS_COOKIE:-$(openssl rand -base64 32)}"
     secrets_cipher="${KRATOS_SECRETS_CIPHER:-$(openssl rand -base64 32)}"
+    smtp_connection_uri="${KRATOS_SMTP_CONNECTION_URI:-${default_smtp_uri}}"
   fi
 
   apply_ory_secret fluxo-kratos \
     --from-literal=dsn="${dsn}" \
     --from-literal=secretsDefault="${secrets_default}" \
     --from-literal=secretsCookie="${secrets_cookie}" \
-    --from-literal=secretsCipher="${secrets_cipher}"
+    --from-literal=secretsCipher="${secrets_cipher}" \
+    --from-literal=smtpConnectionURI="${smtp_connection_uri}"
 }
 
 ensure_hydra_secret() {

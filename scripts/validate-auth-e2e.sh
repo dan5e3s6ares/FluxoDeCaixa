@@ -30,10 +30,12 @@ validate_static_ory_config() {
   log_info "validate: deploy/ory and platform/ory present"
   [[ -f "${REPO_ROOT}/deploy/ory/kratos-values.yaml" ]]
   [[ -f "${REPO_ROOT}/deploy/ory/hydra-values.yaml" ]]
-  log_info "validate: Kratos external secret — no courier SMTP URI (avoids smtpConnectionURI key)"
+  log_info "validate: Kratos external secret seeds smtpConnectionURI when chart sets connection_uri"
   if grep -q 'connection_uri:' "${REPO_ROOT}/deploy/ory/kratos-values.yaml"; then
-    log_error "kratos-values.yaml must not set courier.smtp.connection_uri with secret.enabled=false"
-    exit 1
+    grep -q 'smtpConnectionURI' "${REPO_ROOT}/scripts/deploy-platform.sh" || {
+      log_error "deploy-platform must seed smtpConnectionURI when kratos-values sets courier.smtp.connection_uri"
+      exit 1
+    }
   fi
   [[ -f "${REPO_ROOT}/platform/ory/bootstrap.sh" ]]
   [[ ! -d "${REPO_ROOT}/deploy/authentik" ]]
@@ -45,6 +47,7 @@ validate_static_ory_config() {
   grep -q 'urlencode_component' "${REPO_ROOT}/scripts/lib/common.sh"
   grep -q 'secretsCipher' "${REPO_ROOT}/scripts/deploy-platform.sh"
   grep -q 'secretsCookie' "${REPO_ROOT}/scripts/deploy-platform.sh"
+  grep -q 'smtpConnectionURI' "${REPO_ROOT}/scripts/deploy-platform.sh"
   grep -q 'log_ory_helm_progress' "${REPO_ROOT}/scripts/deploy-platform.sh"
 
   log_info "validate: Ory bootstrap uses Hydra admin API and merchant_id metadata"
