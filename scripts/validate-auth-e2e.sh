@@ -37,6 +37,10 @@ validate_static_authentik_config() {
 
   log_info "validate: deploy-platform seeds PostgreSQL env in fluxo-authentik for existingSecret mode"
   grep -q 'AUTHENTIK_POSTGRESQL__HOST' "${REPO_ROOT}/scripts/deploy-platform.sh"
+
+  log_info "validate: Authentik bootstrap uses flexible JSON field matching (DRF spacing)"
+  grep -q 'json_field_present' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
+  grep -q 'wait_for_oauth2_defaults' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
 }
 
 validate_idp_wait_budget() {

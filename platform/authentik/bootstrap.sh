@@ -43,8 +43,22 @@ api() {
 }
 
 json_pk() {
-  # Authentik API returns integer pks ("pk": 42); older sed only matched quoted strings.
-  sed -n 's/.*"pk"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' | head -n 1 | tr -d ' "'
+  # Prefer the first pk in paginated "results"; fall back to the first pk in the body.
+  local body pk
+  body="$(cat)"
+  pk="$(printf '%s' "${body}" | sed -n 's/.*"results"[^[]*\[[^]]*"pk"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' | head -n 1 | tr -d ' "')"
+  if [ -n "${pk}" ]; then
+    printf '%s' "${pk}"
+    return 0
+  fi
+  printf '%s' "${body}" | sed -n 's/.*"pk"[[:space:]]*:[[:space:]]*\([^,}]*\).*/\1/p' | head -n 1 | tr -d ' "'
+}
+
+json_field_present() {
+  # DRF JSON uses spaces after colons ("slug": "value"); match flexibly.
+  local field="$1"
+  local value="$2"
+  grep -Eq "\"${field}\"[[:space:]]*:[[:space:]]*\"${value}\""
 }
 
 json_ref() {
@@ -99,16 +113,16 @@ wait_for_jwks() {
 }
 
 application_exists() {
-  api GET "/api/v3/core/applications/?slug=${APP_SLUG}" | grep -q "\"slug\":\"${APP_SLUG}\""
+  api GET "/api/v3/core/applications/?slug=${APP_SLUG}" | json_field_present slug "${APP_SLUG}"
 }
 
 mapping_exists() {
-  api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | grep -q "\"name\":\"${MAPPING_NAME}\""
+  api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_field_present name "${MAPPING_NAME}"
 }
 
 provider_client_exists() {
   local client_id="$1"
-  api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | grep -q "\"client_id\":\"${client_id}\""
+  api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | json_field_present client_id "${client_id}"
 }
 
 flow_pk() {
@@ -127,14 +141,22 @@ ensure_merchant_id_mapping() {
   fi
 
   log "creating property mapping ${MAPPING_NAME} (claim merchant_id)"
-  api POST "/api/v3/propertymappings/oauth2/" "$(cat <<EOF
+  if api POST "/api/v3/propertymappings/oauth2/" "$(cat <<EOF
 {
   "name": "${MAPPING_NAME}",
   "scope_name": "merchant_id",
   "expression": "return user.attributes.get(\\\"merchant_id\\\", [None])[0]"
 }
 EOF
-)"
+)"; then
+    return 0
+  fi
+
+  if mapping_exists; then
+    log "property mapping ${MAPPING_NAME} present after create conflict (idempotent)"
+    return 0
+  fi
+  return 1
 }
 
 oauth2_provider_payload() {
@@ -183,7 +205,18 @@ upsert_oauth2_provider() {
   fi
 
   log "creating OAuth2 provider ${client_id}"
-  api POST "/api/v3/providers/oauth2/" "${body}" | json_pk
+  if api POST "/api/v3/providers/oauth2/" "${body}" | json_pk; then
+    return 0
+  fi
+
+  if provider_client_exists "${client_id}"; then
+    provider_pk="$(api GET "/api/v3/providers/oauth2/?client_id=${client_id}" | json_pk)"
+    log "updating OAuth2 provider ${client_id} after create conflict (pk ${provider_pk})"
+    api PATCH "/api/v3/providers/oauth2/${provider_pk}/" "${body}"
+    printf '%s' "${provider_pk}"
+    return 0
+  fi
+  return 1
 }
 
 resolve_oauth2_defaults() {
@@ -194,6 +227,25 @@ resolve_oauth2_defaults() {
   email_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=email" | json_pk)"
   profile_pk="$(api GET "/api/v3/propertymappings/oauth2/?scope_name=profile" | json_pk)"
   mapping_pk="$(api GET "/api/v3/propertymappings/all/?search=${MAPPING_NAME}" | json_pk)"
+}
+
+wait_for_oauth2_defaults() {
+  local attempt=1
+  local max="${OAUTH2_DEFAULTS_WAIT_ATTEMPTS:-30}"
+  local delay="${OAUTH2_DEFAULTS_WAIT_DELAY:-2}"
+
+  while [ "${attempt}" -le "${max}" ]; do
+    resolve_oauth2_defaults
+    if oauth2_defaults_ready; then
+      return 0
+    fi
+    log "waiting for Authentik OAuth2 defaults (${attempt}/${max})..."
+    sleep "${delay}"
+    attempt=$((attempt + 1))
+  done
+
+  resolve_oauth2_defaults
+  oauth2_defaults_ready
 }
 
 oauth2_defaults_ready() {
@@ -216,8 +268,7 @@ ensure_application_provider() {
   fi
 
   ensure_merchant_id_mapping
-  resolve_oauth2_defaults
-  oauth2_defaults_ready || return 1
+  wait_for_oauth2_defaults || return 1
 
   property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
   provider_pk="$(upsert_oauth2_provider "${APP_SLUG}" "${APP_SLUG}" "${property_mappings}" \
@@ -242,8 +293,7 @@ ensure_service_clients() {
   local client_id
   local property_mappings
 
-  resolve_oauth2_defaults
-  oauth2_defaults_ready || return 1
+  wait_for_oauth2_defaults || return 1
   property_mappings="[${openid_pk},${email_pk},${profile_pk},${mapping_pk}]"
 
   IFS=','
