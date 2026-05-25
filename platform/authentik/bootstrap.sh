@@ -14,6 +14,15 @@ log() {
   echo "[authentik-bootstrap] $*"
 }
 
+preflight_commands() {
+  for cmd in curl grep sed head tr; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+      log "required command missing in container image: ${cmd} (use alpine + curl, not curlimages/curl)"
+      exit 1
+    fi
+  done
+}
+
 api() {
   local method="$1"
   local path="$2"
@@ -186,12 +195,18 @@ scope_mapping_list_body() {
   return 1
 }
 
+managed_scope_filter() {
+  # Authentik 2025.12.x built-in scopes use managed=goauthentik.io/providers/oauth2/scope-<name>.
+  printf 'goauthentik.io/providers/oauth2/scope-%s' "$1"
+}
+
 scope_mapping_pk() {
   # Authentik 2025.x lists built-in scopes at provider/scope; legacy oauth2 path may be empty.
   local scope="$1"
-  local query body pk
+  local query body pk managed
 
-  body="$(api_body "/api/v3/propertymappings/provider/scope/?managed=${scope}")"
+  managed="$(managed_scope_filter "${scope}")"
+  body="$(api_body "/api/v3/propertymappings/provider/scope/?managed=${managed}")"
   if [ -n "${body}" ] && printf '%s' "${body}" | json_field_present scope_name "${scope}"; then
     pk="$(printf '%s' "${body}" | json_pk)"
     if [ -n "${pk}" ]; then
@@ -224,6 +239,7 @@ scope_mapping_pk() {
     fi
   fi
 
+  log "scope mapping ${scope} not found (managed=${managed}, scope_name/search, full list)"
   return 1
 }
 
@@ -495,6 +511,7 @@ ensure_service_clients() {
 }
 
 main() {
+  preflight_commands
   wait_for_authentik
   ensure_application_provider
   ensure_service_clients

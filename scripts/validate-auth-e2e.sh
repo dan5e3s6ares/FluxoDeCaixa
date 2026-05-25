@@ -47,6 +47,8 @@ validate_static_authentik_config() {
   grep -q 'grant_types' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
   grep -q 'scope_mapping_list_body' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
   grep -q 'AUTHENTIK_SKIP_READY_WAIT' "${REPO_ROOT}/deploy/authentik/bootstrap-job.yaml"
+  grep -q 'preflight_commands' "${REPO_ROOT}/platform/authentik/bootstrap.sh"
+  grep -q 'alpine:3.20' "${REPO_ROOT}/deploy/authentik/bootstrap-job.yaml"
 
   log_info "validate: Authentik bootstrap helper unit tests"
   sh "${REPO_ROOT}/platform/authentik/test-bootstrap-helpers.sh"
