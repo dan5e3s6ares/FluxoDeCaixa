@@ -101,4 +101,14 @@ fi
 echo "ok merchant_mapping_payload valid json"
 assert_match "merchant_mapping_payload scope_name" "${payload}" scope_name merchant_id
 
+# Create path must capture POST pk and printf it (command substitution in ensure_application_provider).
+if grep -q 'provider_pk="$(api POST "/api/v3/providers/oauth2/"' "${SCRIPT_DIR}/bootstrap.sh" \
+  && awk '/provider_pk="\$\(api POST "\/api\/v3\/providers\/oauth2\//{found=1} found && /printf/{print; exit}' \
+    "${SCRIPT_DIR}/bootstrap.sh" | grep -q 'printf'; then
+  echo "ok upsert_oauth2_provider create path prints pk to stdout"
+else
+  echo "FAIL upsert_oauth2_provider create path must capture and printf pk" >&2
+  exit 1
+fi
+
 echo "platform/authentik/test-bootstrap-helpers.sh — all tests passed"
