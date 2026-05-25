@@ -18,7 +18,6 @@ OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-gateway}"
 CERT_MANAGER_NAMESPACE="${CERT_MANAGER_NAMESPACE:-cert-manager}"
 CERT_MANAGER_RELEASE="${CERT_MANAGER_RELEASE:-cert-manager}"
-ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 FLUXO_NAMESPACE="${FLUXO_NAMESPACE:-fluxo-caixa}"
 READY_ATTEMPTS="${READY_ATTEMPTS:-${HEALTH_RETRY_ATTEMPTS}}"
 READY_DELAY="${READY_DELAY:-${HEALTH_RETRY_DELAY}}"
@@ -317,12 +316,12 @@ check_app_service() {
   local deploy="$1"
   local host="$2"
   if ! kubectl_cmd -n "${FLUXO_NAMESPACE}" get deployment "${deploy}" >/dev/null 2>&1; then
-    log_error "deployment/${deploy} not found in ${FLUXO_NAMESPACE} (ArgoCD may not have synced yet)"
+    log_error "deployment/${deploy} not found in ${FLUXO_NAMESPACE} (run deploy-apps.sh)"
     return 1
   fi
   log_info "checking ${deploy} (${FLUXO_NAMESPACE})..."
   if ! retry "${READY_ATTEMPTS}" "${READY_DELAY}" app_deployment_ready "${deploy}"; then
-    log_error "${deploy} deployment not ready (check image pull / Harbor)"
+    log_error "${deploy} deployment not ready (run build-images.sh and check local :dev images)"
     kubectl_cmd -n "${FLUXO_NAMESPACE}" get pods -l "app=${deploy}" 2>/dev/null || true
     return 1
   fi
@@ -339,32 +338,9 @@ check_apps() {
   check_app_service "svc-consulta" "svc-consulta"
 }
 
-argocd_app_synced() {
-  local health sync
-  health="$(kubectl_cmd -n "${ARGOCD_NAMESPACE}" get application fluxo-caixa \
-    -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
-  sync="$(kubectl_cmd -n "${ARGOCD_NAMESPACE}" get application fluxo-caixa \
-    -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
-  [[ "${health}" == "Healthy" && "${sync}" == "Synced" ]]
-}
-
-check_argocd() {
-  log_info "checking ArgoCD Application/fluxo-caixa (${ARGOCD_NAMESPACE})..."
-  if ! kubectl_cmd -n "${ARGOCD_NAMESPACE}" get application fluxo-caixa >/dev/null 2>&1; then
-    log_error "Application/fluxo-caixa not found (run deploy-apps.sh)"
-    return 1
-  fi
-  if ! retry "${READY_ATTEMPTS}" "${READY_DELAY}" argocd_app_synced; then
-    log_error "Application/fluxo-caixa not Synced+Healthy (check GIT_REPO credentials or Harbor images)"
-    kubectl_cmd -n "${ARGOCD_NAMESPACE}" get application fluxo-caixa -o wide 2>/dev/null || true
-    return 1
-  fi
-  log_info "ArgoCD Application fluxo-caixa Synced and Healthy"
-}
-
 # Doc 07 health table: K3s, cert-manager, NATS+stream, PG, Redis, Keycloak,
 # OTel/Prometheus/Grafana, svc-lancamentos|consolidado|consulta /health,
-# KrakenD /__health, ArgoCD Synced+Healthy. Global timeout 15min (180×5s).
+# KrakenD /__health. Global timeout 15min (180×5s).
 run_health_checks() {
   check_cluster
   check_cert_manager
@@ -375,7 +351,6 @@ run_health_checks() {
   check_observability
   check_krakend
   check_apps
-  check_argocd
 }
 
 main() {

@@ -1,4 +1,4 @@
-# Alembic migrations for schema lancamentos (doc 07). ArgoCD PreSync before app rollout.
+# Alembic migrations for schema lancamentos (doc 07). Applied via kubectl apply before app rollout.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -6,9 +6,6 @@ metadata:
   labels:
     app.kubernetes.io/name: db-migrate-lancamentos
     app.kubernetes.io/part-of: fluxo-caixa
-  annotations:
-    argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   ttlSecondsAfterFinished: 300
   activeDeadlineSeconds: 600

@@ -5,7 +5,7 @@
 
 ## Visão Geral da Solução
 
-Sistema de **fluxo de caixa** multi-tenant para **comerciantes** (`merchant_id`): registro de débitos/créditos com **data de competência** e consulta de **saldo diário consolidado**. Arquitetura em **três microserviços** desacoplados por eventos (**NATS JetStream**), integração **Transactional Outbox**, exposição via **KrakenD** com autenticação **Keycloak (OIDC)**, execução em **Kubernetes (K3s)** com GitOps (**ArgoCD**) e observabilidade **OpenTelemetry**.
+Sistema de **fluxo de caixa** multi-tenant para **comerciantes** (`merchant_id`): registro de débitos/créditos com **data de competência** e consulta de **saldo diário consolidado**. Arquitetura em **três microserviços** desacoplados por eventos (**NATS JetStream**), integração **Transactional Outbox**, exposição via **KrakenD** com autenticação **Keycloak (OIDC)**, execução em **Kubernetes (K3s)** com deploy local via **kubectl/kustomize** e observabilidade **OpenTelemetry**.
 
 | Bounded context | Serviço | Responsabilidade |
 |-----------------|---------|------------------|
@@ -22,7 +22,7 @@ Sistema de **fluxo de caixa** multi-tenant para **comerciantes** (`merchant_id`)
 | **Resiliência** | DB e deploy separados; eventos assíncronos + Outbox | Lançamentos permanecem disponíveis mesmo com consolidado down | Consistência eventual no saldo (lag ≤ 60s p95) |
 | **Escalabilidade** | HPA no consolidado + Redis | Atende 50 req/s com ≤5% de falha em pico | Complexidade de cache invalidation |
 | **Segurança** | Keycloak + JWT (`merchant_id`) + idempotência | Protege dados financeiros multi-tenant | Dependência crítica do IdP |
-| **Operabilidade** | `make start` sobe VM/K8s inteiro | Requisito de plataforma | Curva de aprendizado (K3s, Harbor, GitOps) |
+| **Operabilidade** | `make start` sobe VM/K8s inteiro | Requisito de plataforma | Curva de aprendizado (K3s, podman, kustomize) |
 | **Desacoplamento** | Três microserviços + mensageria | Isolamento de falha e deploy independente no read/write | Mais componentes que monólito modular |
 | **Gateway** | KrakenD (JWT, rate limit, schema) | Superfície única HTTPS | Latência adicional (~ms) no hot path |
 
@@ -53,17 +53,16 @@ Modelo completo: documento **02 - Requisitos e Domínios**.
 
 ## Estrutura de Repositório (monorepo — decisão fechada)
 
-**Monorepo** com `services/lancamentos`, `services/consolidado` e `services/consulta`. Pipeline **Gitea Actions** com **path filters** — build/push apenas do serviço alterado (`services/lancamentos/**`, `services/consolidado/**`, `services/consulta/**`). Imagem: `harbor.local:8080/fluxo-caixa/{svc}:main-{short_sha}` → GitOps ArgoCD (k3s `registries.yaml` espelha `harbor.local` para o Harbor in-VM ou externo).
+**Monorepo** com `services/lancamentos`, `services/consolidado` e `services/consulta`. Imagens locais `fluxo-caixa/{svc}:dev` — build com **podman** (`scripts/build-images.sh`) e import para o containerd do k3s; deploy via **kubectl apply -k** (`deploy/k8s/overlays/dev` ou `prod`).
 
 ```
 /
 ├── Makefile                 # make start | stop | test | test-e2e | clean
 ├── README.md
 ├── docs/                    # espelho opcional dos docs MCP
-├── scripts/                 # bootstrap, cluster, deploy, health
+├── scripts/                 # bootstrap, cluster, build, deploy, health
 ├── deploy/
 │   ├── k8s/                 # manifests / kustomize
-│   ├── argocd/
 │   ├── krakend/
 │   └── keycloak/
 ├── platform/
@@ -82,7 +81,6 @@ Modelo completo: documento **02 - Requisitos e Domínios**.
 │       ├── app/
 │       ├── tests/
 │       └── pyproject.toml
-└── .gitea/workflows/        # CI path-filtered → Harbor → GitOps
 ```
 
 ## Pré-requisitos e `make start`
@@ -90,21 +88,19 @@ Modelo completo: documento **02 - Requisitos e Domínios**.
 | Requisito | Versão / nota |
 |-----------|----------------|
 | VM Linux | Recursos: ≥ 8 GB RAM, 4 vCPU (dev) |
-| Podman | Build/push de imagens (rootful na VM) |
+| Podman | Build local de imagens e import no k3s containerd |
 | K3s | Cluster padrão (`CLUSTER_TYPE=k3s`) |
-| Harbor | **In-VM** via `make start` → `harbor.local:8080` (default). Legado: `HARBOR_EXTERNAL=host:port` (sem default LAN) |
 | uv | Python 3.12+ por serviço |
 | kubectl, helm | Operar cluster |
 
 ```bash
-make start          # idempotente: bootstrap → Harbor → Gitea → cluster → platform → seed-images → apps → wait-healthy
-# Registry externo (ex. Harbor na LAN): HARBOR_EXTERNAL=192.168.68.100:8080 make start
-./scripts/test-registry-config.sh   # valida resolução in-VM vs externo (sem root)
-./scripts/test-seed-images-config.sh   # valida detecção de tag dos manifests (sem Harbor/podman)
+make start          # idempotente: bootstrap → cluster-up → build → deploy-platform → deploy-apps → wait-healthy
+make build          # podman build fluxo-caixa/{svc}:dev + k3s ctr import (SVC=lancamentos para um serviço)
 make test           # pytest unitário por serviço (uv run)
 make test-e2e       # integração via KrakenD (stack up)
 make stop           # derruba cluster; preserva PVCs
 make clean          # cluster-down --purge-pvc
+./scripts/test-podman-nodocker.sh   # valida wiring podman-docker (sem root)
 ```
 
 Comportamento idempotente, scripts e variáveis (`CLUSTER_TYPE`, `ENV`, `SVC`): documento **07 - Plataforma e Sistema**.
@@ -150,7 +146,7 @@ OpenAPI versionada em `/v1/`; erros **RFC 7807**. Gateway valida JSON Schema; se
 | 03 | Padrões (Outbox, CQRS, NATS) |
 | 04 | Arquitetura alvo, diagramas C4, `svc-consulta` |
 | 05 | Segurança, observabilidade |
-| 07 | Plataforma, Makefile, K3s/Harbor |
+| 07 | Plataforma, Makefile, K3s, deploy local |
 | 08 | Índice completo |
 
 Todos os ADRs e especificações detalhadas são documentos filhos de **Desafio Fluxo de Caixa** no Helper AI MCP.

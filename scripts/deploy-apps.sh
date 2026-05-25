@@ -39,16 +39,6 @@ run_sealed_secrets_bootstrap() {
   ENV="${ENV}" "${SEALED_BOOTSTRAP}"
 }
 
-load_deploy_env() {
-  if [[ -f "${REGISTRY_ENV_FILE:-/etc/fluxo-caixa/registry.env}" ]]; then
-    # shellcheck disable=SC1090
-    set -a
-    source "${REGISTRY_ENV_FILE:-/etc/fluxo-caixa/registry.env}"
-    set +a
-    log_info "loaded registry env (HARBOR_IMAGE_REGISTRY=${HARBOR_IMAGE_REGISTRY:-<unset>})"
-  fi
-}
-
 apply_apps_overlay() {
   local overlay_path="${REPO_ROOT}/${KUSTOMIZE_OVERLAY_PATH}"
   if [[ ! -d "${overlay_path}" ]]; then
@@ -61,7 +51,6 @@ apply_apps_overlay() {
 
 main() {
   log_info "deploy-apps.sh — CLUSTER_TYPE=${CLUSTER_TYPE} ENV=${ENV}"
-  load_deploy_env
   configure_kubeconfig
   deploy_sealed_secrets_controller
   run_sealed_secrets_bootstrap

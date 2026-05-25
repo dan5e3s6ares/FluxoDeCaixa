@@ -231,11 +231,6 @@ resolve_svc_target() {
       SVC_DEPLOYMENT="krakend"
       SVC_SELECTOR="app.kubernetes.io/name=krakend"
       ;;
-    argocd)
-      SVC_NAMESPACE="argocd"
-      SVC_DEPLOYMENT="argocd-server"
-      SVC_SELECTOR="app.kubernetes.io/name=argocd-server"
-      ;;
     prometheus)
       SVC_NAMESPACE="observability"
       SVC_SELECTOR="app.kubernetes.io/name=prometheus"
@@ -255,7 +250,7 @@ resolve_svc_target() {
       SVC_SELECTOR="app.kubernetes.io/instance=cert-manager"
       ;;
     *)
-      log_error "Unknown service '${svc}'. Valid: lancamentos, consolidado, consulta, nats, postgres, redis, keycloak, krakend, argocd, prometheus, grafana, otel"
+      log_error "Unknown service '${svc}'. Valid: lancamentos, consolidado, consulta, nats, postgres, redis, keycloak, krakend, prometheus, grafana, otel"
       return 1
       ;;
   esac
