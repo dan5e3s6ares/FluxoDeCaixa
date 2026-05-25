@@ -12,10 +12,12 @@ POSTGRES_NAMESPACE="${POSTGRES_NAMESPACE:-database}"
 POSTGRES_CLUSTER="${POSTGRES_CLUSTER:-fluxo-pg}"
 REDIS_NAMESPACE="${REDIS_NAMESPACE:-cache}"
 REDIS_RELEASE="${REDIS_RELEASE:-redis}"
-AUTHENTIK_NAMESPACE="${AUTHENTIK_NAMESPACE:-security}"
-AUTHENTIK_RELEASE="${AUTHENTIK_RELEASE:-authentik}"
-AUTHENTIK_SERVER_URL="${AUTHENTIK_SERVER_URL:-http://authentik-server.security.svc.cluster.local:9000}"
-AUTHENTIK_OIDC_APP_SLUG="${AUTHENTIK_OIDC_APP_SLUG:-fluxo-caixa}"
+ORY_NAMESPACE="${ORY_NAMESPACE:-security}"
+KRATOS_RELEASE="${KRATOS_RELEASE:-kratos}"
+HYDRA_RELEASE="${HYDRA_RELEASE:-hydra}"
+HYDRA_PUBLIC_URL="${HYDRA_PUBLIC_URL:-http://hydra-public.security.svc.cluster.local:4444}"
+HYDRA_ADMIN_URL="${HYDRA_ADMIN_URL:-http://hydra-admin.security.svc.cluster.local:4445}"
+KRATOS_ADMIN_URL="${KRATOS_ADMIN_URL:-http://kratos-admin.security.svc.cluster.local:4434}"
 OBSERVABILITY_NAMESPACE="${OBSERVABILITY_NAMESPACE:-observability}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-gateway}"
 CERT_MANAGER_NAMESPACE="${CERT_MANAGER_NAMESPACE:-cert-manager}"
@@ -185,60 +187,81 @@ check_redis() {
   log_info "Redis healthy — PING OK"
 }
 
-authentik_server_pods_ready() {
+kratos_pods_ready() {
   local ready total
-  ready="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-    -l "app.kubernetes.io/name=authentik,app.kubernetes.io/component=server,app.kubernetes.io/instance=${AUTHENTIK_RELEASE}" \
+  ready="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=kratos,app.kubernetes.io/instance=${KRATOS_RELEASE}" \
     -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
     | grep -c '^True$' || true)"
-  total="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get pods \
-    -l "app.kubernetes.io/name=authentik,app.kubernetes.io/component=server,app.kubernetes.io/instance=${AUTHENTIK_RELEASE}" \
+  total="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=kratos,app.kubernetes.io/instance=${KRATOS_RELEASE}" \
     --no-headers 2>/dev/null | wc -l | tr -d ' ')"
   [[ "${total}" -ge 1 && "${ready}" -ge "${total}" ]]
 }
 
-authentik_health_ready() {
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod authentik-health-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run authentik-health-check --rm -i --restart=Never \
-    --image=curlimages/curl:8.12.1 \
-    --command -- curl -sf "${AUTHENTIK_SERVER_URL}/-/health/ready/" >/dev/null 2>&1
+hydra_pods_ready() {
+  local ready total
+  ready="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=hydra,app.kubernetes.io/instance=${HYDRA_RELEASE}" \
+    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
+    | grep -c '^True$' || true)"
+  total="$(kubectl_cmd -n "${ORY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/name=hydra,app.kubernetes.io/instance=${HYDRA_RELEASE}" \
+    --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "${total}" -ge 1 && "${ready}" -ge "${total}" ]]
 }
 
-authentik_bootstrap_complete() {
+kratos_health_ready() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod kratos-health-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run kratos-health-check --rm -i --restart=Never \
+    --image=curlimages/curl:8.12.1 \
+    --command -- curl -sf "${KRATOS_ADMIN_URL}/health/ready" >/dev/null 2>&1
+}
+
+hydra_health_ready() {
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod hydra-health-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run hydra-health-check --rm -i --restart=Never \
+    --image=curlimages/curl:8.12.1 \
+    --command -- curl -sf "${HYDRA_ADMIN_URL}/health/ready" >/dev/null 2>&1
+}
+
+ory_bootstrap_complete() {
   local status
-  status="$(kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get job authentik-bootstrap \
+  status="$(kubectl_cmd -n "${ORY_NAMESPACE}" get job ory-bootstrap \
     -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)"
   [[ "${status}" == "True" ]]
 }
 
-authentik_oidc_discovery_url() {
-  echo "${AUTHENTIK_SERVER_URL}/application/o/${AUTHENTIK_OIDC_APP_SLUG}/.well-known/openid-configuration"
+ory_oidc_discovery_url() {
+  echo "${HYDRA_PUBLIC_URL}/.well-known/openid-configuration"
 }
 
-authentik_oidc_discovery_ok() {
+ory_oidc_discovery_ok() {
   local url
-  url="$(authentik_oidc_discovery_url)"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod authentik-oidc-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run authentik-oidc-check --rm -i --restart=Never \
+  url="$(ory_oidc_discovery_url)"
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod ory-oidc-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run ory-oidc-check --rm -i --restart=Never \
     --image=curlimages/curl:8.12.1 \
     --command -- curl -sf "${url}" | grep -q '"issuer"' >/dev/null 2>&1
 }
 
-check_authentik() {
+check_ory_idp() {
   local oidc_url
-  oidc_url="$(authentik_oidc_discovery_url)"
+  oidc_url="$(ory_oidc_discovery_url)"
 
-  log_info "checking Authentik (${AUTHENTIK_NAMESPACE})..."
-  retry "${READY_ATTEMPTS}" "${READY_DELAY}" authentik_server_pods_ready
-  retry "${READY_ATTEMPTS}" "${READY_DELAY}" authentik_health_ready
-  retry "${READY_ATTEMPTS}" "${READY_DELAY}" authentik_bootstrap_complete
+  log_info "checking Ory Kratos + Hydra (${ORY_NAMESPACE})..."
+  retry "${READY_ATTEMPTS}" "${READY_DELAY}" kratos_pods_ready
+  retry "${READY_ATTEMPTS}" "${READY_DELAY}" hydra_pods_ready
+  retry "${READY_ATTEMPTS}" "${READY_DELAY}" kratos_health_ready
+  retry "${READY_ATTEMPTS}" "${READY_DELAY}" hydra_health_ready
+  retry "${READY_ATTEMPTS}" "${READY_DELAY}" ory_bootstrap_complete
 
-  if ! authentik_oidc_discovery_ok; then
-    log_error "Authentik OIDC discovery unreachable at ${oidc_url} — ensure deploy-platform.sh completed and application ${AUTHENTIK_OIDC_APP_SLUG} is bootstrapped"
+  if ! ory_oidc_discovery_ok; then
+    log_error "Ory Hydra OIDC discovery unreachable at ${oidc_url} — ensure deploy-platform.sh completed and ory-bootstrap job succeeded"
     return 1
   fi
 
-  log_info "Authentik healthy — OIDC discovery OK for application ${AUTHENTIK_OIDC_APP_SLUG}"
+  log_info "Ory IdP healthy — Kratos + Hydra OIDC discovery OK"
 }
 
 observability_workloads_ready() {
@@ -352,7 +375,7 @@ check_apps() {
   check_app_service "svc-consulta" "svc-consulta"
 }
 
-# Doc 07 health table: K3s, cert-manager, NATS+stream, PG, Redis, Authentik OIDC,
+# Doc 07 health table: K3s, cert-manager, NATS+stream, PG, Redis, Ory Kratos/Hydra OIDC,
 # OTel/Prometheus/Grafana, svc-lancamentos|consolidado|consulta /health,
 # KrakenD /__health. Global timeout 15min (180×5s).
 run_health_checks() {
@@ -361,7 +384,7 @@ run_health_checks() {
   check_nats
   check_postgres
   check_redis
-  check_authentik
+  check_ory_idp
   check_observability
   check_krakend
   check_apps

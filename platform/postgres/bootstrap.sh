@@ -31,26 +31,27 @@ wait_for_postgres() {
   return 1
 }
 
-ensure_authentik_database() {
+ensure_ory_databases() {
   if [ -z "${PGSUPERPASSWORD:-}" ]; then
-    log "PGSUPERPASSWORD not set; skipping authentik database ensure"
+    log "PGSUPERPASSWORD not set; skipping kratos/hydra database ensure"
     return 0
   fi
 
-  if PGPASSWORD="${PGSUPERPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGSUPERUSER}" -d postgres -tAc \
-    "SELECT 1 FROM pg_database WHERE datname = 'authentik'" | grep -q '^1$'; then
-    log "database authentik already exists"
-    return 0
-  fi
-
-  log "creating database authentik (owner ${PGUSER})"
-  PGPASSWORD="${PGSUPERPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGSUPERUSER}" -d postgres -v ON_ERROR_STOP=1 \
-    -c "CREATE DATABASE authentik OWNER \"${PGUSER}\";"
+  for db in kratos hydra; do
+    if PGPASSWORD="${PGSUPERPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGSUPERUSER}" -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q '^1$'; then
+      log "database ${db} already exists"
+      continue
+    fi
+    log "creating database ${db} (owner ${PGUSER})"
+    PGPASSWORD="${PGSUPERPASSWORD}" psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGSUPERUSER}" -d postgres -v ON_ERROR_STOP=1 \
+      -c "CREATE DATABASE \"${db}\" OWNER \"${PGUSER}\";"
+  done
 }
 
 main() {
   wait_for_postgres
-  ensure_authentik_database
+  ensure_ory_databases
   log "applying bootstrap SQL"
   psql -v ON_ERROR_STOP=1 -f /scripts/bootstrap.sql
   log "verifying schemas"

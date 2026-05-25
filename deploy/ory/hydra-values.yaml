@@ -1,0 +1,58 @@
+# Ory Hydra — OAuth2/OIDC (namespace security, CNPG fluxo-pg).
+# Chart: https://k8s.ory.sh/helm/charts (ory/hydra)
+#
+# Expected secrets in namespace `security`:
+#   fluxo-hydra — dsn, secretsSystem
+#   fluxo-hydra-pg — username, password (CNPG app owner; DB `hydra` via pg-bootstrap)
+#
+# Issuer (in-cluster): http://hydra-public.security.svc.cluster.local:4444/
+
+hydra:
+  automigration:
+    enabled: true
+    type: job
+  config:
+    dsn: memory
+    serve:
+      public:
+        port: 4444
+      admin:
+        port: 4445
+      cookies:
+        same_site_mode: Lax
+    urls:
+      self:
+        issuer: http://hydra-public.security.svc.cluster.local:4444/
+      login: http://kratos-public.security.svc.cluster.local:4433/self-service/login/browser
+      consent: http://kratos-public.security.svc.cluster.local:4433/self-service/consent
+      logout: http://kratos-public.security.svc.cluster.local:4433/self-service/logout/browser
+    strategies:
+      access_token: jwt
+    oauth2:
+      token_hook:
+        url: http://ory-token-hook.security.svc.cluster.local:8080/token-hook
+        auth:
+          type: none
+    secrets: {}
+
+secret:
+  enabled: false
+  nameOverride: fluxo-hydra
+
+maester:
+  enabled: false
+
+deployment:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+service:
+  public:
+    port: 4444
+  admin:
+    port: 4445

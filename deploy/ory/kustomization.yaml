@@ -4,11 +4,12 @@ kind: Kustomization
 namespace: security
 
 configMapGenerator:
-  - name: authentik-bootstrap
+  - name: ory-bootstrap
     files:
-      - bootstrap.sh=../../platform/authentik/bootstrap.sh
+      - bootstrap.sh=../../platform/ory/bootstrap.sh
     options:
       disableNameSuffixHash: true
 
 resources:
+  - token-hook.yaml
   - bootstrap-job.yaml

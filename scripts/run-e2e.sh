@@ -7,10 +7,10 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 KRAKEND_NODEPORT="${KRAKEND_NODEPORT:-30443}"
 KRAKEND_URL="${KRAKEND_URL:-https://127.0.0.1:${KRAKEND_NODEPORT}}"
-AUTHENTIK_NAMESPACE="${AUTHENTIK_NAMESPACE:-security}"
-AUTHENTIK_SERVER_URL="${AUTHENTIK_SERVER_URL:-http://authentik-server.${AUTHENTIK_NAMESPACE}.svc.cluster.local:9000}"
-AUTHENTIK_APP_SLUG="${AUTHENTIK_APP_SLUG:-fluxo-caixa}"
-OIDC_TOKEN_URL="${OIDC_TOKEN_URL:-${AUTHENTIK_SERVER_URL}/application/o/${AUTHENTIK_APP_SLUG}/token/}"
+ORY_NAMESPACE="${ORY_NAMESPACE:-security}"
+HYDRA_PUBLIC_URL="${HYDRA_PUBLIC_URL:-http://hydra-public.${ORY_NAMESPACE}.svc.cluster.local:4444}"
+HYDRA_ADMIN_URL="${HYDRA_ADMIN_URL:-http://hydra-admin.${ORY_NAMESPACE}.svc.cluster.local:4445}"
+OIDC_TOKEN_URL="${OIDC_TOKEN_URL:-${HYDRA_PUBLIC_URL}/oauth2/token}"
 E2E_LANCAMENTOS_CLIENT="${E2E_LANCAMENTOS_CLIENT:-svc-lancamentos}"
 E2E_CONSULTA_CLIENT="${E2E_CONSULTA_CLIENT:-svc-consulta}"
 E2E_SECRET_NAME="${E2E_SECRET_NAME:-e2e-oidc-material}"
@@ -20,74 +20,57 @@ E2E_POLL_MAX_ATTEMPTS="${E2E_POLL_MAX_ATTEMPTS:-90}"
 E2E_POLL_DELAY="${E2E_POLL_DELAY:-2}"
 
 cleanup_e2e_secret() {
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete secret "${E2E_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete secret "${E2E_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1
 }
 
-read_authentik_bootstrap_token() {
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret fluxo-authentik \
-    -o jsonpath='{.data.AUTHENTIK_BOOTSTRAP_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true
-}
-
-read_oidc_client_secret() {
+read_hydra_client_secret() {
   local client_id="$1"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" get secret "fluxo-oidc-${client_id}" \
+  kubectl_cmd -n "${ORY_NAMESPACE}" get secret "fluxo-oidc-${client_id}" \
     -o jsonpath='{.data.client-secret}' 2>/dev/null | base64 -d 2>/dev/null || true
 }
 
-# Obtain client_credentials token via Authentik application fluxo-caixa; ensures SA carries merchant_id.
-obtain_access_token_via_authentik() {
-  local api_token="$1"
-  local oidc_client="$2"
-  local known_secret="${3:-}"
+# Obtain client_credentials token via Ory Hydra; ensures client metadata carries merchant_id.
+obtain_access_token_via_hydra() {
+  local oidc_client="$1"
+  local known_secret="${2:-}"
 
   cleanup_e2e_secret
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod "e2e-oidc-${oidc_client}" --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" create secret generic "${E2E_SECRET_NAME}" \
-    --from-literal=authentik-api-token="${api_token}" >/dev/null
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod "e2e-oidc-${oidc_client}" --ignore-not-found >/dev/null 2>&1
 
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run "e2e-oidc-${oidc_client}" --rm -i --restart=Never \
+  kubectl_cmd -n "${ORY_NAMESPACE}" run "e2e-oidc-${oidc_client}" --rm -i --restart=Never \
     --image=curlimages/curl:8.12.1 \
     --env="OIDC_CLIENT=${oidc_client}" \
     --env="MERCHANT_ID=${E2E_MERCHANT_ID}" \
-    --env="AUTHENTIK_URL=${AUTHENTIK_SERVER_URL}" \
+    --env="HYDRA_ADMIN_URL=${HYDRA_ADMIN_URL}" \
     --env="OIDC_TOKEN_URL=${OIDC_TOKEN_URL}" \
     --env="KNOWN_CLIENT_SECRET=${known_secret}" \
-    --overrides="$(cat <<EOF
-{
-  "spec": {
-    "containers": [{
-      "name": "e2e-oidc-${oidc_client}",
-      "image": "curlimages/curl:8.12.1",
-      "stdin": true,
-      "stdinOnce": true,
-      "env": [
-        {"name": "AUTHENTIK_API_TOKEN", "valueFrom": {"secretKeyRef": {"name": "${E2E_SECRET_NAME}", "key": "authentik-api-token"}}},
-        {"name": "OIDC_CLIENT", "value": "${oidc_client}"},
-        {"name": "MERCHANT_ID", "value": "${E2E_MERCHANT_ID}"},
-        {"name": "AUTHENTIK_URL", "value": "${AUTHENTIK_SERVER_URL}"},
-        {"name": "OIDC_TOKEN_URL", "value": "${OIDC_TOKEN_URL}"},
-        {"name": "KNOWN_CLIENT_SECRET", "value": "${known_secret}"}
-      ],
-      "command": ["sh", "-ce", "set -euo pipefail\napi() { curl -sf -H \"Authorization: Bearer \${AUTHENTIK_API_TOKEN}\" -H \"Content-Type: application/json\" \"\$@\"; }\njson_pk() { sed -n 's/.*\\\"pk\\\"[[:space:]]*:[[:space:]]*\\([^,}]*\\).*/\\1/p' | head -n 1 | tr -d ' \\\"'; }\nPROVIDER_PK=\$(api \"\${AUTHENTIK_URL}/api/v3/providers/oauth2/?client_id=\${OIDC_CLIENT}\" | json_pk)\n[ -n \"\${PROVIDER_PK}\" ] || { echo \"provider not found for \${OIDC_CLIENT}\" >&2; exit 1; }\nif [ -n \"\${KNOWN_CLIENT_SECRET}\" ]; then\n  CLIENT_SECRET=\"\${KNOWN_CLIENT_SECRET}\"\nelse\n  CLIENT_SECRET=\$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n')\n  api -X PATCH \"\${AUTHENTIK_URL}/api/v3/providers/oauth2/\${PROVIDER_PK}/\" --data \"{\\\"client_secret\\\":\\\"\${CLIENT_SECRET}\\\"}\" >/dev/null\nfi\nSA_USERNAME=\"ak-\${OIDC_CLIENT}-client_credentials\"\ncurl -sf -X POST \"\${OIDC_TOKEN_URL}\" -H 'Content-Type: application/x-www-form-urlencoded' -d \"grant_type=client_credentials&client_id=\${OIDC_CLIENT}&client_secret=\${CLIENT_SECRET}\" >/dev/null || true\nUSER_PK=\$(api \"\${AUTHENTIK_URL}/api/v3/core/users/?username=\${SA_USERNAME}\" | json_pk)\n[ -n \"\${USER_PK}\" ] || { echo \"service account \${SA_USERNAME} not found\" >&2; exit 1; }\napi -X PATCH \"\${AUTHENTIK_URL}/api/v3/core/users/\${USER_PK}/\" --data \"{\\\"attributes\\\":{\\\"merchant_id\\\":[\\\"\${MERCHANT_ID}\\\"]}}\" >/dev/null\ncurl -sf -X POST \"\${OIDC_TOKEN_URL}\" -H 'Content-Type: application/x-www-form-urlencoded' -d \"grant_type=client_credentials&client_id=\${OIDC_CLIENT}&client_secret=\${CLIENT_SECRET}&scope=openid+merchant_id\" | sed -n 's/.*\\\"access_token\\\":\\\"\\([^\\\"]*\\)\\\".*/\\1/p'"]
-    }]
-  }
-}
-EOF
-)" 2>/dev/null
+    --command -- sh -ce 'set -euo pipefail
+client_secret="${KNOWN_CLIENT_SECRET}"
+if [ -z "${client_secret}" ]; then
+  client_secret="$(curl -sf "${HYDRA_ADMIN_URL}/clients/${OIDC_CLIENT}" | sed -n "s/.*\"client_secret\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1)"
+fi
+[ -n "${client_secret}" ] || { echo "client secret missing for ${OIDC_CLIENT}" >&2; exit 1; }
+curl -sf -X PUT "${HYDRA_ADMIN_URL}/clients/${OIDC_CLIENT}" \
+  -H "Content-Type: application/json" \
+  --data "{\"client_id\":\"${OIDC_CLIENT}\",\"client_secret\":\"${client_secret}\",\"grant_types\":[\"client_credentials\"],\"response_types\":[\"token\"],\"token_endpoint_auth_method\":\"client_secret_post\",\"scope\":\"openid\",\"metadata\":{\"merchant_id\":\"${MERCHANT_ID}\"}}" >/dev/null
+curl -sf -X POST "${OIDC_TOKEN_URL}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id=${OIDC_CLIENT}&client_secret=${client_secret}&scope=openid" \
+  | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p"' 2>/dev/null
 }
 
 assert_oidc_discovery() {
-  local url="${AUTHENTIK_SERVER_URL}/application/o/${AUTHENTIK_APP_SLUG}/.well-known/openid-configuration"
+  local url="${HYDRA_PUBLIC_URL}/.well-known/openid-configuration"
 
-  log_info "E2E: Authentik OIDC discovery (${AUTHENTIK_APP_SLUG})"
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" delete pod authentik-oidc-e2e-check --ignore-not-found >/dev/null 2>&1
-  kubectl_cmd -n "${AUTHENTIK_NAMESPACE}" run authentik-oidc-e2e-check --rm -i --restart=Never \
+  log_info "E2E: Ory Hydra OIDC discovery"
+  kubectl_cmd -n "${ORY_NAMESPACE}" delete pod ory-oidc-e2e-check --ignore-not-found >/dev/null 2>&1
+  kubectl_cmd -n "${ORY_NAMESPACE}" run ory-oidc-e2e-check --rm -i --restart=Never \
     --image=curlimages/curl:8.12.1 \
     --command -- curl -sf "${url}" | grep -q '"issuer"' >/dev/null 2>&1 || {
     log_error "OIDC discovery failed at ${url}"
     exit 1
   }
-  log_info "OIDC discovery OK for application ${AUTHENTIK_APP_SLUG}"
+  log_info "OIDC discovery OK for Ory Hydra"
 }
 
 assert_krakend_rejects_unauthenticated() {
@@ -234,7 +217,7 @@ poll_consolidado_until_fresh() {
 
 main() {
   local data_competencia lanc_token consulta_token lancamento_id
-  local bootstrap_token lanc_secret consulta_secret
+  local lanc_secret consulta_secret
 
   log_info "run-e2e.sh — E2E via KrakenD (${KRAKEND_URL})"
   configure_kubeconfig
@@ -253,18 +236,12 @@ main() {
   assert_oidc_discovery
   assert_krakend_rejects_unauthenticated
 
-  log_info "E2E: Authentik OIDC client_credentials (${E2E_LANCAMENTOS_CLIENT} + ${E2E_CONSULTA_CLIENT}) via application ${AUTHENTIK_APP_SLUG}"
-  bootstrap_token="$(read_authentik_bootstrap_token)"
-  if [[ -z "${bootstrap_token}" ]]; then
-    log_error "fluxo-authentik AUTHENTIK_BOOTSTRAP_TOKEN missing — deploy Authentik first"
-    exit 1
-  fi
+  log_info "E2E: Ory Hydra OIDC client_credentials (${E2E_LANCAMENTOS_CLIENT} + ${E2E_CONSULTA_CLIENT})"
+  lanc_secret="$(read_hydra_client_secret "${E2E_LANCAMENTOS_CLIENT}")"
+  consulta_secret="$(read_hydra_client_secret "${E2E_CONSULTA_CLIENT}")"
 
-  lanc_secret="$(read_oidc_client_secret "${E2E_LANCAMENTOS_CLIENT}")"
-  consulta_secret="$(read_oidc_client_secret "${E2E_CONSULTA_CLIENT}")"
-
-  lanc_token="$(obtain_access_token_via_authentik "${bootstrap_token}" "${E2E_LANCAMENTOS_CLIENT}" "${lanc_secret}" | tr -d '\n\r')"
-  consulta_token="$(obtain_access_token_via_authentik "${bootstrap_token}" "${E2E_CONSULTA_CLIENT}" "${consulta_secret}" | tr -d '\n\r')"
+  lanc_token="$(obtain_access_token_via_hydra "${E2E_LANCAMENTOS_CLIENT}" "${lanc_secret}" | tr -d '\n\r')"
+  consulta_token="$(obtain_access_token_via_hydra "${E2E_CONSULTA_CLIENT}" "${consulta_secret}" | tr -d '\n\r')"
   if [[ -z "${lanc_token}" ]] || [[ -z "${consulta_token}" ]]; then
     log_error "could not obtain OIDC tokens for ${E2E_LANCAMENTOS_CLIENT} / ${E2E_CONSULTA_CLIENT}"
     exit 1

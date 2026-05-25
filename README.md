@@ -5,7 +5,7 @@
 
 ## Visão Geral da Solução
 
-Sistema de **fluxo de caixa** multi-tenant para **comerciantes** (`merchant_id`): registro de débitos/créditos com **data de competência** e consulta de **saldo diário consolidado**. Arquitetura em **três microserviços** desacoplados por eventos (**NATS JetStream**), integração **Transactional Outbox**, exposição via **KrakenD** com autenticação **Authentik (OIDC)**, execução em **Kubernetes (K3s)** com deploy local via **kubectl/kustomize** e observabilidade **OpenTelemetry**.
+Sistema de **fluxo de caixa** multi-tenant para **comerciantes** (`merchant_id`): registro de débitos/créditos com **data de competência** e consulta de **saldo diário consolidado**. Arquitetura em **três microserviços** desacoplados por eventos (**NATS JetStream**), integração **Transactional Outbox**, exposição via **KrakenD** com autenticação **Ory Kratos + Hydra (OIDC)**, execução em **Kubernetes (K3s)** com deploy local via **kubectl/kustomize** e observabilidade **OpenTelemetry**.
 
 | Bounded context | Serviço | Responsabilidade |
 |-----------------|---------|------------------|
@@ -21,7 +21,7 @@ Sistema de **fluxo de caixa** multi-tenant para **comerciantes** (`merchant_id`)
 |-------|---------|---------|-------------------------|
 | **Resiliência** | DB e deploy separados; eventos assíncronos + Outbox | Lançamentos permanecem disponíveis mesmo com consolidado down | Consistência eventual no saldo (lag ≤ 60s p95) |
 | **Escalabilidade** | HPA no consolidado + Redis | Atende 50 req/s com ≤5% de falha em pico | Complexidade de cache invalidation |
-| **Segurança** | Authentik + JWT (`merchant_id`) + idempotência | Protege dados financeiros multi-tenant | Dependência crítica do IdP |
+| **Segurança** | Ory Kratos + Hydra + JWT (`merchant_id`) + idempotência | Protege dados financeiros multi-tenant | Dependência crítica do IdP |
 | **Operabilidade** | `make start` sobe VM/K8s inteiro | Requisito de plataforma | Curva de aprendizado (K3s, podman, kustomize) |
 | **Desacoplamento** | Três microserviços + mensageria | Isolamento de falha e deploy independente no read/write | Mais componentes que monólito modular |
 | **Gateway** | KrakenD (JWT, rate limit, schema) | Superfície única HTTPS | Latência adicional (~ms) no hot path |
@@ -64,9 +64,9 @@ Modelo completo: documento **02 - Requisitos e Domínios**.
 ├── deploy/
 │   ├── k8s/                 # manifests / kustomize
 │   ├── krakend/
-│   └── authentik/
+│   └── ory/
 ├── platform/
-│   ├── authentik/   # bootstrap OIDC (platform/authentik/bootstrap.sh)
+│   ├── ory/         # bootstrap OIDC (platform/ory/bootstrap.sh)
 │   ├── otel/
 │   └── nats/
 ├── services/
@@ -106,21 +106,22 @@ make clean          # cluster-down --purge-pvc
 
 
 
-## Autentik OIDC (bootstrap)
+## Ory Kratos + Hydra OIDC (bootstrap)
 
-IdP adotado conforme [Simplificação de Projeto](simplificacao-de-projeto) — **Fase B** (Keycloak removido).
+IdP adotado conforme [Simplificação de Projeto](simplificacao-de-projeto) — **Fase B** (Authentik/Keycloak removidos).
 
 | Aspecto | Valor |
 |---------|-------|
 | Namespace | `security` |
-| Application | `fluxo-caixa` |
-| Issuer (in-cluster) | `http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/` |
-| JWKS (KrakenD) | `http://authentik-server.security.svc.cluster.local:9000/application/o/fluxo-caixa/jwks/` |
-| Claim obrigatório | `merchant_id` (property mapping Authentik) |
-| Bootstrap | Job `authentik-bootstrap` + `platform/authentik/bootstrap.sh` (idempotente) |
-| DB | CNPG `fluxo-pg`, database `authentik` |
+| Identity | Ory Kratos (`kratos-public`, schema com `merchant_id`) |
+| OAuth2/OIDC | Ory Hydra (`hydra-public`) |
+| Issuer (in-cluster) | `http://hydra-public.security.svc.cluster.local:4444/` |
+| JWKS (KrakenD) | `http://hydra-public.security.svc.cluster.local:4444/.well-known/jwks.json` |
+| Claim obrigatório | `merchant_id` (Hydra client metadata + token hook) |
+| Bootstrap | Job `ory-bootstrap` + `platform/ory/bootstrap.sh` (idempotente) |
+| DB | CNPG `fluxo-pg`, databases `kratos` e `hydra` |
 
-`make start` → `deploy-platform.sh` instala Helm `goauthentik/authentik`, executa bootstrap (OAuth2 provider, application, clients `svc-lancamentos`/`svc-consolidado`/`svc-consulta`) e valida OIDC discovery. **Não** deployar Keycloak para este projeto.
+`make start` → `deploy-platform.sh` instala Helm `ory/kratos` e `ory/hydra`, executa bootstrap (OAuth2 clients `svc-lancamentos`/`svc-consolidado`/`svc-consulta`) e valida OIDC discovery. **Não** deployar Authentik ou Keycloak para este projeto.
 
 Comportamento idempotente, scripts e variáveis (`CLUSTER_TYPE`, `ENV`, `SVC`): documento **07 - Plataforma e Sistema**.
 
@@ -171,4 +172,4 @@ OpenAPI versionada em `/v1/`; erros **RFC 7807**. Gateway valida JSON Schema; se
 
 Todos os ADRs e especificações detalhadas são documentos filhos de **Desafio Fluxo de Caixa** no Helper AI MCP.
 
-> **Sincronização 2026-05-25:** deploy local podman→k3s (`:dev`), sem CI/GitOps — ver [Simplificação de Projeto](simplificacao-de-projeto). IdP **Authentik** (Fase B). Alinhado aos docs **01–05** e **07** (v6+).
+> **Sincronização 2026-05-25:** deploy local podman→k3s (`:dev`), sem CI/GitOps — ver [Simplificação de Projeto](simplificacao-de-projeto). IdP **Ory Kratos + Hydra** (Fase B). Alinhado aos docs **01–05** e **07** (v6+).
