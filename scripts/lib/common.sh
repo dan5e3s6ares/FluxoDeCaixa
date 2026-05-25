@@ -22,6 +22,11 @@ log_error() {
   echo "[ERROR] $*" >&2
 }
 
+# Percent-encode a URI component (e.g. CNPG username/password in postgres:// DSNs).
+urlencode_component() {
+  python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
 require_cmd() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
